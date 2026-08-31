@@ -34,7 +34,7 @@ func sinkUsable(sink Sink) bool {
 	v := reflect.ValueOf(sink)
 	//nolint:exhaustive // only the nilable kinds need an IsNil guard; default covers the rest
 	switch v.Kind() {
-	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
 		return !v.IsNil()
 	default:
 		return true
