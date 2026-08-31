@@ -27,7 +27,7 @@ A clear and concise description of what actually happened.
 ## Environment
 
 - Go version: [e.g. 1.26.2]
-- httpc version: [e.g. v0.1.0]
+- celexp version: [e.g. v0.1.0]
 - OS: [e.g. macOS 15, Ubuntu 24.04]
 
 ## Additional Context
