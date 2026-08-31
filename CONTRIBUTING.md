@@ -94,7 +94,7 @@ task bench
 
 ## Coordination with scafctl
 
-This package is used by [scafctl](https://github.com/oakwood-commons/scafctl) as its HTTP client.
+This package is used by [scafctl](https://github.com/oakwood-commons/scafctl) as its CEL expression engine.
 Breaking changes to the public API should be coordinated with the scafctl repository.
 
 ## License

@@ -28,7 +28,7 @@ func TestBuildDataContext(t *testing.T) {
 			name:    "both set returns error",
 			data:    `{"a":1}`,
 			file:    "some.json",
-			wantErr: "cannot use both --data and --file",
+			wantErr: "cannot use both data and file",
 		},
 		{
 			name: "inline JSON object",

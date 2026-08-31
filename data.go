@@ -17,7 +17,7 @@ import (
 // nil when both are empty.
 func BuildDataContext(data, file string) (any, error) {
 	if data != "" && file != "" {
-		return nil, fmt.Errorf("cannot use both --data and --file")
+		return nil, fmt.Errorf("cannot use both data and file")
 	}
 
 	if data == "" && file == "" {

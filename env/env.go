@@ -62,8 +62,8 @@ var (
 	// baseEnvInitialized tracks whether base environment options have been created.
 	baseEnvInitialized bool
 	// baseEnvOpts contains all extension function options (BuiltIn + Custom), cached for reuse.
-	// Note: debug.DebugOutFunc is NOT included here because it requires a Writer parameter.
-	// It is added separately via NewWithWriter() or by callers using DebugOutEnvOptions().
+	// Note: debug.DebugOutFunc is NOT included here because it requires a debug.Sink parameter.
+	// It is added separately via NewWithSink() or by callers using DebugOutEnvOptions().
 	baseEnvOpts []cel.EnvOption
 	// baseEnvErr stores any error from base environment initialization
 	baseEnvErr error
@@ -75,7 +75,7 @@ var (
 // loading itself is not context-dependent and will complete once started.
 //
 // Note: debug.DebugOutFunc is NOT included in the cached options because it
-// requires a Writer parameter. Use DebugOutEnvOptions() to add it separately.
+// requires a debug.Sink parameter. Use DebugOutEnvOptions() to add it separately.
 func getBaseEnvOptions(ctx context.Context) ([]cel.EnvOption, error) {
 	// Check context before potentially waiting on mutex
 	if err := ctx.Err(); err != nil {
@@ -85,7 +85,7 @@ func getBaseEnvOptions(ctx context.Context) ([]cel.EnvOption, error) {
 	baseEnvMu.Lock()
 	if !baseEnvInitialized {
 		// Get all CEL extension functions (both built-in and custom)
-		// Note: ext.All() excludes debug.DebugOutFunc which requires Writer
+		// Note: ext.All() excludes debug.DebugOutFunc which requires a debug.Sink
 		extFuncs := ext.All()
 
 		// Pre-allocate based on typical extension count
