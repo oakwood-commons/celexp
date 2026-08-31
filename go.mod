@@ -7,9 +7,9 @@ require (
 	github.com/google/cel-go v0.30.0
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.12.1
-	golang.org/x/text v0.40.0
+	golang.org/x/text v0.41.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d
-	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 
