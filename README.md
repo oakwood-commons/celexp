@@ -8,7 +8,8 @@ namespaces.
 `celexp` was extracted from a larger CLI so that any application can embed the
 CEL engine without pulling in unrelated code. It is **dependency-light**: its
 only non-test third-party dependencies are `cel-go`, `go-logr`, `google/uuid`,
-`golang.org/x/text`, and `gopkg.in/yaml.v3`.
+`golang.org/x/text`, `gopkg.in/yaml.v3`, and the CEL protobuf types from
+`google.golang.org/genproto` and `google.golang.org/protobuf`.
 
 ## Install
 

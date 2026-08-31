@@ -34,7 +34,7 @@ func TestNormalizeFilePath(t *testing.T) {
 		{
 			name: "Multiple colons",
 			path: "prefix:subprefix:folder\\file.txt",
-			want: "subprefix",
+			want: "subprefix:folder/file.txt",
 		},
 		{
 			name: "Empty string",

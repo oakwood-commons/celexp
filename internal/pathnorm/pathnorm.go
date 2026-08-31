@@ -9,12 +9,15 @@ package pathnorm
 
 import "strings"
 
-// NormalizeFilePath normalizes a file path by removing any prefix before a colon (':'),
-// and replacing all backslashes ('\') with forward slashes ('/'). This is useful for
-// ensuring consistent file path formatting across different operating systems.
+// NormalizeFilePath normalizes a file path by removing any prefix up to and
+// including the first colon (':'), and replacing all backslashes ('\') with
+// forward slashes ('/'). This is useful for ensuring consistent file path
+// formatting across different operating systems. Only the first colon is
+// treated as the prefix separator, so any remaining colons in the path are
+// preserved.
 func NormalizeFilePath(path string) string {
 	if strings.Contains(path, ":") {
-		path = strings.Split(path, ":")[1]
+		path = strings.SplitN(path, ":", 2)[1]
 	}
 	return strings.ReplaceAll(path, "\\", "/")
 }
