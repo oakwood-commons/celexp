@@ -93,7 +93,58 @@ free of any application dependency:
 
 `arrays`, `debug`, `filepath`, `guid`, `host`, `map`, `marshalling` (`json.*` /
 `yaml.*`), `out`, `regex`, `sort`, `strings`, `time`, `url` -- plus cel-go's
-own standard extensions.
+own standard extensions (`lists`, `math`, `sets`, `encoders`, `protos`,
+`lang`, ...). Call `ext.Namespaces()` for the authoritative, sorted list.
+
+Every `ExtFunction` returned by `ext.All()`/`BuiltIn()`/`Custom()` carries a
+`Namespace` -- this is the allowlist unit consumed by `ext.Select`,
+`ext.SelectOptions`, and `env.NewRestricted` (below). It is assigned
+explicitly per entry rather than derived from `Name`, because `Name` is not a
+uniform namespace: a `BuiltIn()` entry names a cel-go extension/option (e.g.
+`"strings"`, `"optionalTypes"`), while a `Custom()` entry names a
+fully-qualified function (e.g. `"regex.match"`). The overlap between cel-go's
+built-in `strings` extension and celexp's `strings.*` custom functions
+sharing the `strings` namespace is deliberate: allowlisting `"strings"` gets
+both.
+
+## Restricted environments
+
+`bootstrap.Default()` and `env.New` load the **full** extension set,
+including namespaces that touch the filesystem/host (`filepath`, `host`),
+can block or panic (`debug`), or are non-deterministic (`time`, `guid`).
+That's the right default for a trusted embedding, but wrong for evaluating
+semi-untrusted input such as a user-supplied validation predicate.
+
+`env.NewRestricted` builds a CEL environment from an explicit namespace
+allowlist instead, bypassing the full extension set and the package-level
+base-environment cache entirely -- it is unaffected by whether
+`bootstrap.Default()` has been called elsewhere in the process, so a single
+process can safely run both a full and a restricted environment side by side.
+
+```go
+e, err := env.NewRestricted(ctx, env.SafePredicate, cel.Variable("x", cel.IntType))
+if err != nil {
+    return err
+}
+// e compiles `x > 2` and `"a,b".split(",")`, but NOT `host.configDir("x")`,
+// `debug.sleep(1)`, `filepath.exists(...)`, or `time.now()`.
+```
+
+`env.SafePredicate` is a pre-built allowlist (`strings`, `lists`, `math`,
+`sets`, `regex`, `lang`, `arrays`, `map`, `sort`, `out`) suited to pure boolean
+predicates. Build a custom allowlist with `env.NewRestricted(ctx, []string{...})`
+directly, or inspect/validate namespace names with `ext.Namespaces()` /
+`ext.Select()` / `ext.SelectOptions()`.
+
+An unknown namespace name is a hard error -- a typo must not silently narrow
+(or fail to narrow) the sandbox.
+
+**Cache isolation:** `celexp.GlobalCache`/the default `ProgramCache` is shared
+process-wide and keyed (in its traditional mode) on the compiled function set,
+so a restricted and a full environment do not collide. Still, if a process
+evaluates expressions under more than one restricted allowlist, pair each
+one with its own cache via `celexp.WithCache(...)` rather than relying on the
+shared default cache.
 
 ## Development
 

@@ -153,9 +153,18 @@ type VarInfo struct {
 // ExtFunction defines a custom CEL extension function that can be registered
 // with the CEL environment to extend the expression language capabilities.
 type ExtFunction struct {
-	Name          string          `json:"name,omitempty" yaml:"name,omitempty" doc:"Function name" maxLength:"128" example:"size"`
-	Signature     string          `json:"signature,omitempty" yaml:"signature,omitempty" doc:"Type signature" maxLength:"256" example:"map.add(map<string,dyn>, string, dyn) -> map<string,dyn>"`
-	Category      string          `json:"category,omitempty" yaml:"category,omitempty" doc:"Function category" maxLength:"64" example:"collections"`
+	Name      string `json:"name,omitempty" yaml:"name,omitempty" doc:"Function name" maxLength:"128" example:"size"`
+	Signature string `json:"signature,omitempty" yaml:"signature,omitempty" doc:"Type signature" maxLength:"256" example:"map.add(map<string,dyn>, string, dyn) -> map<string,dyn>"`
+	Category  string `json:"category,omitempty" yaml:"category,omitempty" doc:"Function category" maxLength:"64" example:"collections"`
+	// Namespace is the allowlist unit used by ext.Select/env.NewRestricted to
+	// build least-privilege CEL environments. It is assigned explicitly per
+	// entry (never derived from Name) because Name is not a uniform namespace:
+	// BuiltIn() entries name a cel-go extension/option (e.g. "strings",
+	// "optionalTypes"), while Custom() entries name a fully-qualified function
+	// (e.g. "regex.match"). Explicit assignment also resolves the deliberate
+	// overlap where celexp's "strings.*" custom functions and cel-go's built-in
+	// "strings" extension both belong to the same "strings" namespace.
+	Namespace     string          `json:"namespace,omitempty" yaml:"namespace,omitempty" doc:"Allowlist unit for restricted/least-privilege environments" maxLength:"64" example:"strings"`
 	Links         []string        `json:"links,omitempty" yaml:"links,omitempty" doc:"Reference URLs" maxItems:"10"`
 	Examples      []Example       `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Usage examples" maxItems:"20"`
 	Description   string          `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable description" maxLength:"1024" example:"Returns the size of a collection"`
