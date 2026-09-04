@@ -26,7 +26,7 @@ var ErrUnknownNamespace = errors.New("unknown extension namespace")
 // Example usage:
 //
 //	names := ext.Namespaces()
-//	// names == []string{"arrays", "astValidators"... "url"}
+//	// names == []string{"arrays", "debug"... "url"}
 func Namespaces() []string {
 	seen := make(map[string]struct{})
 	for _, f := range All() {
