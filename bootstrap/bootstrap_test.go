@@ -12,6 +12,7 @@ import (
 
 	"github.com/oakwood-commons/celexp"
 	"github.com/oakwood-commons/celexp/bootstrap"
+	"github.com/oakwood-commons/celexp/env"
 )
 
 // TestDefault verifies that after bootstrap.Default() the core resolves the full
@@ -34,4 +35,24 @@ func TestDefault_Idempotent(t *testing.T) {
 		bootstrap.Default()
 		bootstrap.Default()
 	})
+}
+
+// TestNewRestrictedUnaffectedByBootstrapDefault confirms that
+// env.NewRestricted stays restricted even after bootstrap.Default() has
+// registered the process-global full-extension factory elsewhere. This is
+// the core guarantee that makes NewRestricted usable in the same process as
+// the default environment: it talks to cel.NewEnv directly and never
+// consults the global factory that Default() installs.
+func TestNewRestrictedUnaffectedByBootstrapDefault(t *testing.T) {
+	bootstrap.Default()
+
+	e, err := env.NewRestricted(context.Background(), env.SafePredicate)
+	require.NoError(t, err)
+	require.NotNil(t, e)
+
+	_, iss := e.Compile(`host.configDir("myapp")`)
+	assert.Error(t, iss.Err(), "restricted env must not gain host.* just because bootstrap.Default() ran")
+
+	_, iss = e.Compile(`"a,b".split(",").size() == 2`)
+	assert.NoError(t, iss.Err())
 }
