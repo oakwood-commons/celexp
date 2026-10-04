@@ -117,43 +117,44 @@ func (ev *lazyEval) bind(v any) any {
 	return out
 }
 
-// bindChanged rewrites v; path holds the maps being walked so a
-// self-referential map is not descended into again (it is left as-is).
-func (ev *lazyEval) bindChanged(v any, path map[uintptr]bool) (any, bool) {
+// bindChanged rewrites v. seen maps each walked map to its copy, so a
+// self-referential (or shared) map resolves to the same copy instead of
+// recursing forever, and back-edges point at the rebound copy.
+func (ev *lazyEval) bindChanged(v any, seen map[uintptr]*mapCopy) (any, bool) {
 	switch t := v.(type) {
 	case LazyMap:
 		return &lazyMapVal{spec: t, ev: ev, done: make(map[string]ref.Val, len(t))}, true
 	case map[string]any:
-		// ponytail: walks every nested map[string]any per evaluation; fine for
-		// fact maps, revisit if callers pass very large eager trees.
+		// ponytail: walks (and copies) every nested map[string]any per
+		// evaluation; fine for fact maps, revisit for very large eager trees.
 		p := reflect.ValueOf(t).Pointer()
-		if path[p] {
-			return v, false
+		if s, ok := seen[p]; ok {
+			s.used = true
+			return s.cp, true
 		}
-		if path == nil {
-			path = map[uintptr]bool{}
+		if seen == nil {
+			seen = map[uintptr]*mapCopy{}
 		}
-		path[p] = true
-		defer delete(path, p)
-		var cp map[string]any
+		s := &mapCopy{cp: make(map[string]any, len(t))}
+		seen[p] = s
+		changed := false
 		for k, e := range t {
-			ne, changed := ev.bindChanged(e, path)
-			if !changed {
-				continue
-			}
-			if cp == nil {
-				cp = make(map[string]any, len(t))
-				for k2, e2 := range t {
-					cp[k2] = e2
-				}
-			}
-			cp[k] = ne
+			ne, c := ev.bindChanged(e, seen)
+			s.cp[k] = ne
+			changed = changed || c
 		}
-		if cp != nil {
-			return cp, true
+		if changed || s.used {
+			return s.cp, true
 		}
 	}
 	return v, false
+}
+
+// mapCopy is the per-evaluation copy of a walked map; used records whether
+// a cycle or shared reference already points at it.
+type mapCopy struct {
+	cp   map[string]any
+	used bool
 }
 
 // lazyMapVal is the per-evaluation CEL view of a LazyMap. Unlike Kubernetes'

@@ -89,13 +89,14 @@ func TestLazyMap_ValueKinds(t *testing.T) {
 }
 
 func TestLazyMap_CyclicVarMap(t *testing.T) {
-	m := map[string]any{"a": 1, "lm": LazyMap{"k": 2}}
+	m := map[string]any{"a": 1, "lm": LazyMap{"k": func() any { return 2 }}}
 	m["self"] = m
-	prog, err := Expression(`m.a == 1 && m.self.lm.k == 2`).CompileWithVarDecls([]VarDecl{NewVarDecl("m", cel.DynType)})
+	prog, err := Expression(`m.a == 1 && m.self.lm.k == 2 && m.self.self.lm.k == 2`).CompileWithVarDecls([]VarDecl{NewVarDecl("m", cel.DynType)})
 	require.NoError(t, err)
 	got, err := prog.EvalBool(context.Background(), map[string]any{"m": m})
 	require.NoError(t, err)
 	assert.True(t, got)
+	assert.IsType(t, LazyMap{}, m["lm"], "caller's map not modified")
 }
 
 type customFact struct{ s string }
