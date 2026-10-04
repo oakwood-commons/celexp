@@ -69,6 +69,8 @@ func TestCondition_Unmarshal(t *testing.T) {
 		{name: "yaml null plus other key rejected", format: "yaml", input: "when: {expr: null, expression: \"true\"}", wantErr: []string{"must not be null"}},
 		{name: "yaml unknown key rejected", format: "yaml", input: "when: {expr: \"false\", exrp: \"true\"}", wantErr: []string{"unknown key \"exrp\""}},
 		{name: "json unknown key rejected", format: "json", input: `{"when":{"expr":"false","exrp":"true"}}`, wantErr: []string{"unknown key \"exrp\""}},
+		{name: "json object bool value", format: "json", input: `{"when":{"expression":false}}`, wantExpr: new("false")},
+		{name: "json object number rejected", format: "json", input: `{"when":{"expr":5}}`, wantErr: []string{"\"expr\" must be a string or boolean"}},
 		{name: "json null plus other key rejected", format: "json", input: `{"when":{"expr":null,"expression":"true"}}`, wantErr: []string{"must not be null"}},
 		{name: "yaml bad bool tag", format: "yaml", input: "when: !!bool maybe", wantErr: []string{"line 1, column 7"}},
 
@@ -88,7 +90,7 @@ func TestCondition_Unmarshal(t *testing.T) {
 		{name: "json empty object", format: "json", input: `{"when":{}}`, wantErr: []string{"expected object with 'expr' or 'expression'"}},
 		{name: "json typo key", format: "json", input: `{"when":{"exp":"_.x"}}`, wantErr: []string{"unknown key \"exp\""}},
 		{name: "json empty expr", format: "json", input: `{"when":{"expr":""}}`, wantErr: []string{"empty string"}},
-		{name: "json non-string expr", format: "json", input: `{"when":{"expression":7}}`, wantErr: []string{"expected boolean, string, or object"}},
+		{name: "json non-string expr", format: "json", input: `{"when":{"expression":7}}`, wantErr: []string{"\"expression\" must be a string or boolean"}},
 	}
 
 	for _, tt := range tests {

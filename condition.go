@@ -156,20 +156,28 @@ func (c *Condition) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	var obj map[string]*Expression
+	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return fmt.Errorf("invalid condition: expected boolean, string, or object {\"expr\": \"...\"}: %w", err)
 	}
 	var vals [2]*Expression
-	for k, v := range obj {
+	for k, raw := range obj {
 		idx, ok := conditionKeys[k]
 		if !ok {
 			return fmt.Errorf("invalid condition: unknown key %q; use 'expr' or 'expression'", k)
 		}
-		if v == nil {
+		var v any
+		_ = json.Unmarshal(raw, &v) // raw is valid JSON: the outer decode succeeded
+		switch v := v.(type) {
+		case nil:
 			return fmt.Errorf("invalid condition: %q must not be null", k)
+		case bool:
+			vals[idx] = exprPtr(strconv.FormatBool(v))
+		case string:
+			vals[idx] = exprPtr(v)
+		default:
+			return fmt.Errorf("invalid condition: %q must be a string or boolean", k)
 		}
-		vals[idx] = v
 	}
 	expr, err := pickExpr(vals[0], vals[1])
 	if err != nil {
