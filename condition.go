@@ -1,0 +1,263 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
+package celexp
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Condition is a boolean CEL expression written in YAML or JSON.
+//
+// Accepted forms (YAML shown; JSON accepts the same shapes):
+//   - Boolean literal:  when: true / when: false
+//   - String shorthand: when: "_.environment == 'prod'"
+//   - Explicit object:  when: { expr: "_.environment == 'prod'" }
+//   - Expression alias: when: { expression: "_.environment == 'prod'" }
+//
+// null decodes to a zero Condition (nil Expr), which evaluates to true:
+// an absent condition does not block. Callers that need "absent = deny"
+// must check Expr == nil themselves.
+type Condition struct {
+	Expr *Expression `json:"expr" yaml:"expr" doc:"CEL expression that must evaluate to boolean" example:"_.environment == 'prod'"`
+}
+
+// Expression returns the condition's CEL expression, or "true" for a nil
+// Condition or nil Expr. Use it to compile the condition once with the
+// caller's own environment and options, then evaluate with EvalBool:
+//
+//	prog, err := cond.Expression().CompileWithVarDecls(decls, celexp.WithCostLimit(10000))
+//	ok, err := prog.EvalBool(ctx, vars)
+func (c *Condition) Expression() Expression {
+	if c == nil || c.Expr == nil {
+		return "true"
+	}
+	return *c.Expr
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler. It accepts a boolean literal,
+// a non-empty string, or a mapping with exactly one of "expr" or
+// "expression". Errors carry the node's line and column.
+func (c *Condition) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		return c.unmarshalScalarYAML(node)
+	case yaml.MappingNode:
+		return c.unmarshalMappingYAML(node)
+	case yaml.AliasNode:
+		// yaml.v3 resolves aliases before calling us; kept for direct callers.
+		return c.UnmarshalYAML(node.Alias)
+	case yaml.DocumentNode, yaml.SequenceNode:
+		fallthrough
+	default:
+		return fmt.Errorf("invalid condition at line %d, column %d: expected boolean, string, or object {expr: \"...\"}, got unsupported node kind", node.Line, node.Column)
+	}
+}
+
+func (c *Condition) unmarshalScalarYAML(node *yaml.Node) error {
+	switch node.ShortTag() {
+	case "!!bool":
+		// Normalize True/TRUE to the CEL literal spelling.
+		var b bool
+		if err := node.Decode(&b); err != nil {
+			return fmt.Errorf("invalid condition at line %d, column %d: %w", node.Line, node.Column, err)
+		}
+		c.Expr = exprPtr(strconv.FormatBool(b))
+		return nil
+	case "!!str":
+		if node.Value == "" {
+			return fmt.Errorf("invalid condition at line %d, column %d: empty string is not a valid CEL expression", node.Line, node.Column)
+		}
+		c.Expr = exprPtr(node.Value)
+		return nil
+	case "!!null":
+		c.Expr = nil
+		return nil
+	default:
+		return fmt.Errorf("invalid condition at line %d, column %d: unsupported type %s; use true, false, a CEL expression string, or {expr: \"...\"}", node.Line, node.Column, node.ShortTag())
+	}
+}
+
+func (c *Condition) unmarshalMappingYAML(node *yaml.Node) error {
+	var raw struct {
+		Expr       yaml.Node `yaml:"expr"`
+		Expression yaml.Node `yaml:"expression"`
+	}
+	if err := node.Decode(&raw); err != nil {
+		return fmt.Errorf("invalid condition at line %d, column %d: %w", node.Line, node.Column, err)
+	}
+	exprVal, err := yamlExprValue(&raw.Expr)
+	if err != nil {
+		return err
+	}
+	expressionVal, err := yamlExprValue(&raw.Expression)
+	if err != nil {
+		return err
+	}
+	expr, err := pickExpr(exprVal, expressionVal)
+	if err != nil {
+		return fmt.Errorf("invalid condition at line %d, column %d: %w", node.Line, node.Column, err)
+	}
+	c.Expr = expr
+	return nil
+}
+
+// yamlExprValue decodes the value of an expr/expression key with the same
+// scalar rules as the top-level form (so a non-string is rejected at its own
+// position), returning nil for an absent or null value.
+func yamlExprValue(n *yaml.Node) (*Expression, error) {
+	if n.Kind == 0 { // key absent
+		return nil, nil
+	}
+	if n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	if n.Kind != yaml.ScalarNode {
+		return nil, fmt.Errorf("invalid condition at line %d, column %d: expression must be a string or boolean", n.Line, n.Column)
+	}
+	var c Condition
+	if err := c.unmarshalScalarYAML(n); err != nil {
+		return nil, err
+	}
+	return c.Expr, nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler. It accepts the same shapes as
+// UnmarshalYAML.
+func (c *Condition) UnmarshalJSON(data []byte) error {
+	*c = Condition{}
+
+	if string(bytes.TrimSpace(data)) == "null" {
+		return nil
+	}
+
+	var b bool
+	if json.Unmarshal(data, &b) == nil {
+		c.Expr = exprPtr(strconv.FormatBool(b))
+		return nil
+	}
+
+	var s string
+	if json.Unmarshal(data, &s) == nil {
+		if s == "" {
+			return fmt.Errorf("invalid condition: empty string is not a valid CEL expression")
+		}
+		c.Expr = exprPtr(s)
+		return nil
+	}
+
+	var obj struct {
+		Expr       *Expression `json:"expr"`
+		Expression *Expression `json:"expression"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return fmt.Errorf("invalid condition: expected boolean, string, or object {\"expr\": \"...\"}: %w", err)
+	}
+	expr, err := pickExpr(obj.Expr, obj.Expression)
+	if err != nil {
+		return fmt.Errorf("invalid condition: %w", err)
+	}
+	c.Expr = expr
+	return nil
+}
+
+// pickExpr validates the object form: exactly one of expr/expression, non-empty.
+func pickExpr(expr, expression *Expression) (*Expression, error) {
+	switch {
+	case expr != nil && expression != nil:
+		return nil, fmt.Errorf("specify either 'expr' or 'expression', not both")
+	case expr == nil && expression == nil:
+		return nil, fmt.Errorf("expected object with 'expr' or 'expression'")
+	case expression != nil:
+		expr = expression
+	}
+	if *expr == "" {
+		return nil, fmt.Errorf("empty string is not a valid CEL expression")
+	}
+	return expr, nil
+}
+
+// MarshalYAML implements yaml.Marshaler. "true"/"false" marshal as booleans,
+// anything else as the string shorthand, nil as null.
+func (c Condition) MarshalYAML() (any, error) {
+	if c.Expr == nil {
+		return nil, nil
+	}
+	switch s := string(*c.Expr); s {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return s, nil
+	}
+}
+
+// MarshalJSON implements json.Marshaler with the same canonical form as
+// MarshalYAML.
+func (c Condition) MarshalJSON() ([]byte, error) {
+	v, err := c.MarshalYAML()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(v)
+}
+
+// Evaluate compiles and evaluates the condition in one shot, with rootData
+// bound to "_" (see EvaluateExpression). A nil Condition or nil Expr
+// evaluates to true. A non-boolean result is an error.
+func (c *Condition) Evaluate(ctx context.Context, rootData map[string]any) (bool, error) {
+	return c.EvaluateWithAdditionalVars(ctx, rootData, nil)
+}
+
+// EvaluateWithAdditionalVars is Evaluate with extra top-level variables.
+func (c *Condition) EvaluateWithAdditionalVars(ctx context.Context, rootData, additionalVars map[string]any) (bool, error) {
+	if c == nil || c.Expr == nil {
+		return true, nil
+	}
+	result, err := EvaluateExpression(ctx, string(*c.Expr), rootData, additionalVars)
+	if err != nil {
+		return false, fmt.Errorf("condition evaluation failed: %w", err)
+	}
+	return asBool(result)
+}
+
+// EvaluateWithSelf is Evaluate with VarSelf (__self) bound to self.
+func (c *Condition) EvaluateWithSelf(ctx context.Context, rootData map[string]any, self any) (bool, error) {
+	return c.EvaluateWithAdditionalVars(ctx, rootData, map[string]any{VarSelf: self})
+}
+
+// EvalBool evaluates a compiled program and requires a boolean result; any
+// other result (including null) is an error, never a silent false.
+//
+// vars may hold lazily computed values as func() any (or func() ref.Val):
+// cel-go calls the function only when the expression reads that variable,
+// so a short-circuited branch never computes it. cel-go memoizes the result
+// by writing it back into vars, so build a fresh map per evaluation and do
+// not share one across goroutines.
+func (r *CompileResult) EvalBool(ctx context.Context, vars map[string]any) (bool, error) {
+	result, err := r.EvalWithContext(ctx, vars)
+	if err != nil {
+		return false, err
+	}
+	return asBool(result)
+}
+
+func asBool(v any) (bool, error) {
+	b, ok := v.(bool)
+	if !ok {
+		return false, fmt.Errorf("condition must evaluate to boolean, got %T", v)
+	}
+	return b, nil
+}
+
+func exprPtr(s string) *Expression {
+	e := Expression(s)
+	return &e
+}

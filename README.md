@@ -79,7 +79,7 @@ free of any application dependency:
 
 ## Package layout
 
-- `celexp` (root) -- `Expression`, `ExtFunction`, `ProgramCache`,
+- `celexp` (root) -- `Expression`, `Condition`, `ExtFunction`, `ProgramCache`,
   `EvaluateExpression`, compile/evaluate/validate, the logger seam.
 - `conversion` -- Go <-> CEL value conversion helpers.
 - `detail` -- function detail/documentation builders.
@@ -145,6 +145,42 @@ so a restricted and a full environment do not collide. Still, if a process
 evaluates expressions under more than one restricted allowlist, pair each
 one with its own cache via `celexp.WithCache(...)` rather than relying on the
 shared default cache.
+
+## Conditions
+
+`celexp.Condition` is a boolean CEL expression written in YAML or JSON. It
+accepts four forms:
+
+```yaml
+when: true                                  # boolean literal
+when: "_.env == 'prod'"                     # string shorthand
+when: { expr: "_.env == 'prod'" }           # explicit object
+when: { expression: "_.env == 'prod'" }     # alias
+```
+
+Anything else (numbers, lists, empty strings, objects with neither or both of
+`expr`/`expression`) is rejected; YAML errors carry the line and column. A
+null/absent condition evaluates to `true`. Marshalling emits the canonical
+form: a bare boolean for `true`/`false`, otherwise the string shorthand.
+
+Compile once with your own declarations and options, then evaluate. A
+non-boolean result is an error, never a silent `false`. Variables may be
+lazy (`func() any`) -- they are computed only if the expression reads them:
+
+```go
+prog, err := cond.Expression().CompileWithVarDecls(
+    []celexp.VarDecl{celexp.NewVarDecl("user", cel.DynType)},
+    celexp.WithCostLimit(10_000),
+)
+if err != nil {
+    return err
+}
+ok, err := prog.EvalBool(ctx, map[string]any{
+    "user": func() any { return loadUser() }, // skipped if short-circuited
+})
+```
+
+For one-shot evaluation with root data bound to `_`, use `cond.Evaluate`.
 
 ## Development
 
