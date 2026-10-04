@@ -337,6 +337,13 @@ func ClearDefaultCache() {
 	GetDefaultCache().Clear()
 }
 
+// adaptedProgram is a cached program paired with the type adapter of the
+// environment that built it.
+type adaptedProgram struct {
+	cel.Program
+	adapter types.Adapter
+}
+
 // CompileResult contains the compiled CEL program and metadata
 type CompileResult struct {
 	// Program is the compiled CEL program ready for evaluation
@@ -443,8 +450,13 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		adapter = keyResult.env.CELTypeAdapter()
 	}
 
-	// Try to get from cache
+	// Try to get from cache. The cache key does not cover custom type
+	// adapters, so the adapter is taken from the cached entry (stored with
+	// its program) rather than from this call's environment.
 	if prog, found := config.cache.Get(keyResult.key); found {
+		if ap, ok := prog.(adaptedProgram); ok {
+			adapter = ap.adapter
+		}
 		return &CompileResult{
 			Program:      prog,
 			Expression:   e,
@@ -500,8 +512,8 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		return nil, fmt.Errorf("failed to create program for expression %q: %w", e, err)
 	}
 
-	// Store in cache
-	config.cache.Put(keyResult.key, prog, string(e))
+	// Store in cache, paired with the adapter it was built with.
+	config.cache.Put(keyResult.key, adaptedProgram{Program: prog, adapter: adapter}, string(e))
 
 	return &CompileResult{
 		Program:      prog,

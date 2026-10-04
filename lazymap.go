@@ -72,7 +72,7 @@ func (ev *lazyEval) lazyView(m LazyMap) *lazyMapVal {
 	p := reflect.ValueOf(m).Pointer()
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
-	if v, ok := ev.views[p]; ok && p != 0 {
+	if v, ok := ev.views[p]; ok {
 		return v
 	}
 	if ev.views == nil {

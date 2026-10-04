@@ -114,6 +114,42 @@ func TestLazyMap_SharedAcrossAliases(t *testing.T) {
 
 type customFact struct{ s string }
 
+// prefixAdapter adapts customFact to a string with its prefix.
+type prefixAdapter string
+
+func (p prefixAdapter) NativeToValue(v any) ref.Val {
+	if c, ok := v.(customFact); ok {
+		return types.String(string(p) + c.s)
+	}
+	return types.DefaultTypeAdapter.NativeToValue(v)
+}
+
+// A cache hit built with another adapter must adapt lazy and eager values
+// with the same (cached program's) adapter.
+func TestLazyMap_CachedAdapterConsistency(t *testing.T) {
+	cache := NewProgramCache(10)
+	decls := func(a prefixAdapter) []cel.EnvOption {
+		return lazyRootEnv(cel.Variable("x", cel.DynType), cel.CustomTypeAdapter(a))
+	}
+	vars := map[string]any{"x": customFact{"v"}, "_": LazyMap{"f": func() any { return customFact{"v"} }}}
+	for _, a := range []prefixAdapter{"A:", "B:"} {
+		prog, err := Expression(`x == _.f`).Compile(decls(a), WithCache(cache))
+		require.NoError(t, err)
+		got, err := prog.EvalBool(context.Background(), vars)
+		require.NoError(t, err)
+		assert.True(t, got, "adapter %s", a)
+	}
+}
+
+func TestLazyMap_NilAliases(t *testing.T) {
+	var lm LazyMap
+	prog, err := Expression(`a == b && size(a) == 0`).CompileWithVarDecls([]VarDecl{NewVarDecl("a", cel.DynType), NewVarDecl("b", cel.DynType)})
+	require.NoError(t, err)
+	got, err := prog.EvalBool(context.Background(), map[string]any{"a": lm, "b": lm})
+	require.NoError(t, err)
+	assert.True(t, got)
+}
+
 type customAdapter struct{}
 
 func (customAdapter) NativeToValue(v any) ref.Val {
