@@ -159,16 +159,28 @@ when: { expression: "_.env == 'prod'" }     # alias
 ```
 
 Anything else (numbers, lists, empty strings, objects with neither or both of
-`expr`/`expression`) is rejected; YAML errors carry the line and column. A
-null/absent condition evaluates to `true`. Marshalling emits the canonical
-form: a bare boolean for `true`/`false`, otherwise the string shorthand.
+`expr`/`expression`, unknown keys, null values) is rejected; YAML errors carry
+the line and column. Marshalling emits the canonical form: a bare boolean for
+`true`/`false`, otherwise the string shorthand.
+
+Conditions fail closed. A null/absent condition (nil `Condition` or nil
+`Expr`) is not "true": `Expression()` and the `Evaluate*` helpers return
+`celexp.ErrNoCondition`. Callers that want "absent = run" check for nil (or
+`errors.Is(err, celexp.ErrNoCondition)`) themselves.
 
 Compile once with your own declarations and options, then evaluate. A
-non-boolean result is an error, never a silent `false`. Variables may be
-lazy (`func() any`) -- they are computed only if the expression reads them:
+non-boolean result is an error, never a silent `false`. Variables may be lazy
+-- `func() any` or `func() (any, error)` -- and are computed only if the
+expression reads them, at most once per evaluation. A fact's error fails the
+evaluation and is wrapped, so `errors.Is`/`errors.As` work on the result. The
+caller's vars map is never modified, so it can be reused:
 
 ```go
-prog, err := cond.Expression().CompileWithVarDecls(
+expr, err := cond.Expression() // celexp.ErrNoCondition if absent
+if err != nil {
+    return err
+}
+prog, err := expr.CompileWithVarDecls(
     []celexp.VarDecl{celexp.NewVarDecl("user", cel.DynType)},
     celexp.WithCostLimit(10_000),
 )
@@ -176,7 +188,7 @@ if err != nil {
     return err
 }
 ok, err := prog.EvalBool(ctx, map[string]any{
-    "user": func() any { return loadUser() }, // skipped if short-circuited
+    "user": func() (any, error) { return loadUser() }, // skipped if short-circuited
 })
 ```
 

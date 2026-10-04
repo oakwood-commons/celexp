@@ -7,11 +7,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
+	"github.com/google/cel-go/common/types"
 	"gopkg.in/yaml.v3"
 )
+
+// ErrNoCondition is returned when evaluating or compiling a nil Condition or
+// one with a nil Expr (e.g. decoded from null). Conditions fail closed:
+// callers that want "absent = allow/run" must check for nil themselves or
+// test errors.Is(err, ErrNoCondition).
+var ErrNoCondition = errors.New("no condition: nil Condition or Expr")
 
 // Condition is a boolean CEL expression written in YAML or JSON.
 //
@@ -21,24 +29,24 @@ import (
 //   - Explicit object:  when: { expr: "_.environment == 'prod'" }
 //   - Expression alias: when: { expression: "_.environment == 'prod'" }
 //
-// null decodes to a zero Condition (nil Expr), which evaluates to true:
-// an absent condition does not block. Callers that need "absent = deny"
-// must check Expr == nil themselves.
+// null decodes to a zero Condition (nil Expr). Evaluating or compiling it
+// fails closed with ErrNoCondition rather than returning true.
 type Condition struct {
 	Expr *Expression `json:"expr" yaml:"expr" doc:"CEL expression that must evaluate to boolean" example:"_.environment == 'prod'"`
 }
 
-// Expression returns the condition's CEL expression, or "true" for a nil
-// Condition or nil Expr. Use it to compile the condition once with the
+// Expression returns the condition's CEL expression, or ErrNoCondition for
+// a nil Condition or nil Expr. Use it to compile the condition once with the
 // caller's own environment and options, then evaluate with EvalBool:
 //
-//	prog, err := cond.Expression().CompileWithVarDecls(decls, celexp.WithCostLimit(10000))
+//	expr, err := cond.Expression()
+//	prog, err := expr.CompileWithVarDecls(decls, celexp.WithCostLimit(10000))
 //	ok, err := prog.EvalBool(ctx, vars)
-func (c *Condition) Expression() Expression {
+func (c *Condition) Expression() (Expression, error) {
 	if c == nil || c.Expr == nil {
-		return "true"
+		return "", ErrNoCondition
 	}
-	return *c.Expr
+	return *c.Expr, nil
 }
 
 // UnmarshalYAML implements yaml.Unmarshaler. It accepts a boolean literal,
@@ -230,18 +238,24 @@ func (c Condition) MarshalJSON() ([]byte, error) {
 }
 
 // Evaluate compiles and evaluates the condition in one shot, with rootData
-// bound to "_" (see EvaluateExpression). A nil Condition or nil Expr
-// evaluates to true. A non-boolean result is an error.
+// bound to "_" (see EvaluateExpression). A nil Condition or nil Expr returns
+// ErrNoCondition. A non-boolean result is an error.
 func (c *Condition) Evaluate(ctx context.Context, rootData map[string]any) (bool, error) {
 	return c.EvaluateWithAdditionalVars(ctx, rootData, nil)
 }
 
-// EvaluateWithAdditionalVars is Evaluate with extra top-level variables.
+// EvaluateWithAdditionalVars is Evaluate with extra top-level variables,
+// which may be lazy as described on EvalBool. additionalVars is not modified.
 func (c *Condition) EvaluateWithAdditionalVars(ctx context.Context, rootData, additionalVars map[string]any) (bool, error) {
-	if c == nil || c.Expr == nil {
-		return true, nil
+	expr, err := c.Expression()
+	if err != nil {
+		return false, err
 	}
-	result, err := EvaluateExpression(ctx, string(*c.Expr), rootData, additionalVars)
+	vars, factErr := lazyVars(additionalVars)
+	result, err := EvaluateExpression(ctx, string(expr), rootData, vars)
+	if ferr := factErr(); ferr != nil {
+		return false, fmt.Errorf("condition evaluation failed: %w", ferr)
+	}
 	if err != nil {
 		return false, fmt.Errorf("condition evaluation failed: %w", err)
 	}
@@ -256,17 +270,46 @@ func (c *Condition) EvaluateWithSelf(ctx context.Context, rootData map[string]an
 // EvalBool evaluates a compiled program and requires a boolean result; any
 // other result (including null) is an error, never a silent false.
 //
-// vars may hold lazily computed values as func() any (or func() ref.Val):
-// cel-go calls the function only when the expression reads that variable,
-// so a short-circuited branch never computes it. cel-go memoizes the result
-// by writing it back into vars, so build a fresh map per evaluation and do
-// not share one across goroutines.
+// vars may hold lazily computed values as func() any, func() ref.Val, or
+// func() (any, error): the function runs only when the expression reads that
+// variable (so a short-circuited branch never computes it), at most once per
+// evaluation. vars itself is never modified. If a func() (any, error) returns
+// an error, evaluation fails with an error wrapping it, even when CEL's
+// commutative ||/&& would otherwise have absorbed it.
 func (r *CompileResult) EvalBool(ctx context.Context, vars map[string]any) (bool, error) {
-	result, err := r.EvalWithContext(ctx, vars)
+	act, factErr := lazyVars(vars)
+	result, err := r.EvalWithContext(ctx, act)
+	if ferr := factErr(); ferr != nil {
+		return false, fmt.Errorf("failed to evaluate expression %q: %w", r.Expression, ferr)
+	}
 	if err != nil {
 		return false, err
 	}
 	return asBool(result)
+}
+
+// lazyVars returns a shallow copy of vars, so cel-go's memoization of lazy
+// values writes into the copy, with each func() (any, error) adapted to a lazy
+// func() any. The returned func reports the first fact error.
+func lazyVars(vars map[string]any) (act map[string]any, factErr func() error) {
+	var firstErr error
+	act = make(map[string]any, len(vars))
+	for name, v := range vars {
+		if fact, ok := v.(func() (any, error)); ok {
+			v = func() any {
+				val, err := fact()
+				if err != nil {
+					if firstErr == nil {
+						firstErr = fmt.Errorf("variable %q: %w", name, err)
+					}
+					return types.WrapErr(err)
+				}
+				return val
+			}
+		}
+		act[name] = v
+	}
+	return act, func() error { return firstErr }
 }
 
 func asBool(v any) (bool, error) {

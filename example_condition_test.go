@@ -22,7 +22,11 @@ func ExampleCondition() {
 		panic(err)
 	}
 
-	prog, err := rule.When.Expression().CompileWithVarDecls([]celexp.VarDecl{
+	expr, err := rule.When.Expression() // ErrNoCondition if the rule had no condition
+	if err != nil {
+		panic(err)
+	}
+	prog, err := expr.CompileWithVarDecls([]celexp.VarDecl{
 		celexp.NewVarDecl("admin", cel.BoolType),
 		celexp.NewVarDecl("user", cel.DynType),
 	}, celexp.WithCostLimit(10_000))
@@ -33,7 +37,8 @@ func ExampleCondition() {
 	lookups := 0
 	ok, err := prog.EvalBool(context.Background(), map[string]any{
 		"admin": true,
-		"user":  func() any { lookups++; return map[string]any{"groups": []any{"dev"}} },
+		// Lazy facts may also return an error: func() (any, error).
+		"user": func() (any, error) { lookups++; return map[string]any{"groups": []any{"dev"}}, nil },
 	})
 	if err != nil {
 		panic(err)
