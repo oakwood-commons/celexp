@@ -85,28 +85,32 @@ func (c *Condition) unmarshalScalarYAML(node *yaml.Node) error {
 }
 
 func (c *Condition) unmarshalMappingYAML(node *yaml.Node) error {
-	var raw struct {
-		Expr       yaml.Node `yaml:"expr"`
-		Expression yaml.Node `yaml:"expression"`
+	var vals [2]*Expression // expr, expression
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		k, v := node.Content[i], node.Content[i+1]
+		idx, ok := conditionKeys[k.Value]
+		if !ok {
+			return fmt.Errorf("invalid condition at line %d, column %d: unknown key %q; use 'expr' or 'expression'", k.Line, k.Column, k.Value)
+		}
+		e, err := yamlExprValue(v)
+		if err != nil {
+			return err
+		}
+		if e == nil {
+			return fmt.Errorf("invalid condition at line %d, column %d: %q must not be null", v.Line, v.Column, k.Value)
+		}
+		vals[idx] = e
 	}
-	if err := node.Decode(&raw); err != nil {
-		return fmt.Errorf("invalid condition at line %d, column %d: %w", node.Line, node.Column, err)
-	}
-	exprVal, err := yamlExprValue(&raw.Expr)
-	if err != nil {
-		return err
-	}
-	expressionVal, err := yamlExprValue(&raw.Expression)
-	if err != nil {
-		return err
-	}
-	expr, err := pickExpr(exprVal, expressionVal)
+	expr, err := pickExpr(vals[0], vals[1])
 	if err != nil {
 		return fmt.Errorf("invalid condition at line %d, column %d: %w", node.Line, node.Column, err)
 	}
 	c.Expr = expr
 	return nil
 }
+
+// conditionKeys maps the accepted object keys to their slot.
+var conditionKeys = map[string]int{"expr": 0, "expression": 1}
 
 // yamlExprValue decodes the value of an expr/expression key with the same
 // scalar rules as the top-level form (so a non-string is rejected at its own
@@ -152,14 +156,22 @@ func (c *Condition) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	var obj struct {
-		Expr       *Expression `json:"expr"`
-		Expression *Expression `json:"expression"`
-	}
+	var obj map[string]*Expression
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return fmt.Errorf("invalid condition: expected boolean, string, or object {\"expr\": \"...\"}: %w", err)
 	}
-	expr, err := pickExpr(obj.Expr, obj.Expression)
+	var vals [2]*Expression
+	for k, v := range obj {
+		idx, ok := conditionKeys[k]
+		if !ok {
+			return fmt.Errorf("invalid condition: unknown key %q; use 'expr' or 'expression'", k)
+		}
+		if v == nil {
+			return fmt.Errorf("invalid condition: %q must not be null", k)
+		}
+		vals[idx] = v
+	}
+	expr, err := pickExpr(vals[0], vals[1])
 	if err != nil {
 		return fmt.Errorf("invalid condition: %w", err)
 	}
