@@ -99,6 +99,9 @@ func (c *Condition) unmarshalMappingYAML(node *yaml.Node) error {
 		if !ok {
 			return fmt.Errorf("invalid condition at line %d, column %d: unknown key %q; use 'expr' or 'expression'", k.Line, k.Column, k.Value)
 		}
+		if vals[idx] != nil {
+			return fmt.Errorf("invalid condition at line %d, column %d: duplicate key %q", k.Line, k.Column, k.Value)
+		}
 		e, err := yamlExprValue(v)
 		if err != nil {
 			return err
@@ -163,18 +166,37 @@ func (c *Condition) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(data, &obj); err != nil {
+	// Walk the object's members in order (not via a map) so duplicate keys
+	// are rejected rather than silently collapsed.
+	badShape := func(err error) error {
 		return fmt.Errorf("invalid condition: expected boolean, string, or object {\"expr\": \"...\"}: %w", err)
 	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if tok, err := dec.Token(); err != nil {
+		return badShape(err)
+	} else if tok != json.Delim('{') {
+		return badShape(fmt.Errorf("unexpected %v", tok))
+	}
 	var vals [2]*Expression
-	for k, raw := range obj {
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return badShape(err)
+		}
+		k, _ := tok.(string) // object keys are always strings
 		idx, ok := conditionKeys[k]
 		if !ok {
 			return fmt.Errorf("invalid condition: unknown key %q; use 'expr' or 'expression'", k)
 		}
+		if seen[k] {
+			return fmt.Errorf("invalid condition: duplicate key %q", k)
+		}
+		seen[k] = true
 		var v any
-		_ = json.Unmarshal(raw, &v) // raw is valid JSON: the outer decode succeeded
+		if err := dec.Decode(&v); err != nil {
+			return badShape(err)
+		}
 		switch v := v.(type) {
 		case nil:
 			return fmt.Errorf("invalid condition: %q must not be null", k)

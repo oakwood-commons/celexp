@@ -32,7 +32,8 @@ import (
 //     LazyMaps).
 //
 // Iterating the map with a single-variable macro (all/exists/exists_one/map/
-// filter) resolves every entry. Equality is pointer identity of the
+// filter) resolves each entry as it is visited; a macro that stops early
+// (all/exists) leaves later entries unresolved. Equality is pointer identity of the
 // per-evaluation view (as in Kubernetes), so == never resolves entries and a
 // LazyMap never equals a map literal. Converting the whole map to a native Go
 // value is disallowed (an error, no funcs run), so returning or converting
@@ -112,20 +113,31 @@ func (ev *lazyEval) factErr() error {
 // bind replaces LazyMaps in v with per-evaluation resolvers, copying any
 // map[string]any on the path to one rather than modifying it.
 func (ev *lazyEval) bind(v any) any {
-	out, _ := ev.bindChanged(v)
+	out, _ := ev.bindChanged(v, nil)
 	return out
 }
 
-func (ev *lazyEval) bindChanged(v any) (any, bool) {
+// bindChanged rewrites v; path holds the maps being walked so a
+// self-referential map is not descended into again (it is left as-is).
+func (ev *lazyEval) bindChanged(v any, path map[uintptr]bool) (any, bool) {
 	switch t := v.(type) {
 	case LazyMap:
 		return &lazyMapVal{spec: t, ev: ev, done: make(map[string]ref.Val, len(t))}, true
 	case map[string]any:
 		// ponytail: walks every nested map[string]any per evaluation; fine for
 		// fact maps, revisit if callers pass very large eager trees.
+		p := reflect.ValueOf(t).Pointer()
+		if path[p] {
+			return v, false
+		}
+		if path == nil {
+			path = map[uintptr]bool{}
+		}
+		path[p] = true
+		defer delete(path, p)
 		var cp map[string]any
 		for k, e := range t {
-			ne, changed := ev.bindChanged(e)
+			ne, changed := ev.bindChanged(e, path)
 			if !changed {
 				continue
 			}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/ext"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -85,6 +86,40 @@ func TestLazyMap_ValueKinds(t *testing.T) {
 	got, err := evalLazy(t, `_.plain == 5 && _.any == "s" && _.nested.deep && _.inMap.lm.k == 7`, root)
 	require.NoError(t, err)
 	assert.True(t, got)
+}
+
+func TestLazyMap_CyclicVarMap(t *testing.T) {
+	m := map[string]any{"a": 1, "lm": LazyMap{"k": 2}}
+	m["self"] = m
+	prog, err := Expression(`m.a == 1 && m.self.lm.k == 2`).CompileWithVarDecls([]VarDecl{NewVarDecl("m", cel.DynType)})
+	require.NoError(t, err)
+	got, err := prog.EvalBool(context.Background(), map[string]any{"m": m})
+	require.NoError(t, err)
+	assert.True(t, got)
+}
+
+type customFact struct{ s string }
+
+type customAdapter struct{}
+
+func (customAdapter) NativeToValue(v any) ref.Val {
+	if c, ok := v.(customFact); ok {
+		return types.String("custom:" + c.s)
+	}
+	return types.DefaultTypeAdapter.NativeToValue(v)
+}
+
+func TestLazyMap_CustomAdapter(t *testing.T) {
+	opts := lazyRootEnv(cel.CustomTypeAdapter(customAdapter{}))
+	for _, pass := range []string{"cache miss", "cache hit"} {
+		t.Run(pass, func(t *testing.T) {
+			prog, err := Expression(`_.f == "custom:x"`).Compile(opts)
+			require.NoError(t, err)
+			got, err := prog.EvalBool(context.Background(), map[string]any{"_": LazyMap{"f": func() any { return customFact{"x"} }}})
+			require.NoError(t, err)
+			assert.True(t, got)
+		})
+	}
 }
 
 func TestLazyMap_NestedLaziness(t *testing.T) {

@@ -217,7 +217,9 @@ ok, err := cond.Evaluate(ctx, facts) // when: "has(_.quota) && _.env == 'prod'"
 - A func's error fails the evaluation, wrapped (`errors.Is`/`errors.As`).
 - Resolved values are adapted like eager vars (maps, lists, nested LazyMaps).
 - **Iterating** the map with a single-variable macro (`all`/`exists`/
-  `exists_one`/`map`/`filter`) resolves every entry. `==` is pointer
+  `exists_one`/`map`/`filter`) resolves each entry as it is visited; a
+  macro that stops early (`all`/`exists`) leaves later entries unresolved.
+  `==` is pointer
   identity of the per-evaluation view (`_ == _` is true; a LazyMap never
   equals a map literal) and resolves nothing. Converting or returning the
   whole map is an error and resolves nothing.
