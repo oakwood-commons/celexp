@@ -61,8 +61,26 @@ type LazyMap map[string]any
 type lazyEval struct {
 	adapter types.Adapter
 
-	mu  sync.Mutex
-	err error
+	mu    sync.Mutex
+	err   error
+	views map[uintptr]*lazyMapVal // one resolver per LazyMap identity
+}
+
+// lazyView returns the evaluation's resolver for m, shared by every alias of
+// the same LazyMap so each entry runs at most once per evaluation.
+func (ev *lazyEval) lazyView(m LazyMap) *lazyMapVal {
+	p := reflect.ValueOf(m).Pointer()
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	if v, ok := ev.views[p]; ok && p != 0 {
+		return v
+	}
+	if ev.views == nil {
+		ev.views = map[uintptr]*lazyMapVal{}
+	}
+	v := &lazyMapVal{spec: m, ev: ev, done: make(map[string]ref.Val, len(m))}
+	ev.views[p] = v
+	return v
 }
 
 // bindVars returns a shallow copy of vars for one evaluation, so cel-go's
@@ -123,7 +141,7 @@ func (ev *lazyEval) bind(v any) any {
 func (ev *lazyEval) bindChanged(v any, seen map[uintptr]*mapCopy) (any, bool) {
 	switch t := v.(type) {
 	case LazyMap:
-		return &lazyMapVal{spec: t, ev: ev, done: make(map[string]ref.Val, len(t))}, true
+		return ev.lazyView(t), true
 	case map[string]any:
 		// ponytail: walks (and copies) every nested map[string]any per
 		// evaluation; fine for fact maps, revisit for very large eager trees.

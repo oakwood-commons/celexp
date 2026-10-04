@@ -99,6 +99,19 @@ func TestLazyMap_CyclicVarMap(t *testing.T) {
 	assert.IsType(t, LazyMap{}, m["lm"], "caller's map not modified")
 }
 
+func TestLazyMap_SharedAcrossAliases(t *testing.T) {
+	var x atomic.Int32
+	lm := LazyMap{"x": counted(&x, 1)}
+	prog, err := Expression(`a.x == b.x && c.lm.x == 1`).CompileWithVarDecls([]VarDecl{
+		NewVarDecl("a", cel.DynType), NewVarDecl("b", cel.DynType), NewVarDecl("c", cel.DynType),
+	})
+	require.NoError(t, err)
+	got, err := prog.EvalBool(context.Background(), map[string]any{"a": lm, "b": lm, "c": map[string]any{"lm": lm}})
+	require.NoError(t, err)
+	assert.True(t, got)
+	assert.Equal(t, int32(1), x.Load())
+}
+
 type customFact struct{ s string }
 
 type customAdapter struct{}
