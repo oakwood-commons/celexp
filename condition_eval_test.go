@@ -306,13 +306,16 @@ func TestCondition_Evaluate(t *testing.T) {
 	tests := []struct {
 		name    string
 		cond    *Condition
-		root    map[string]any
+		root    any
 		extra   map[string]any
 		self    any
 		useSelf bool
 		want    bool
 		wantErr string
 	}{
+		{name: "nil root is null", cond: &Condition{Expr: exprPtr("_ == null")}, want: true},
+		{name: "nil root with extra", cond: &Condition{Expr: exprPtr("_ == null && x == 1")}, extra: map[string]any{"x": 1}, want: true},
+		{name: "nil root with self", cond: &Condition{Expr: exprPtr("_ == null && __self == 2")}, self: 2, useSelf: true, want: true},
 		{name: "root equality", cond: &Condition{Expr: exprPtr("_.env == 'prod'")}, root: map[string]any{"env": "prod"}, want: true},
 		{name: "root comparison false", cond: &Condition{Expr: exprPtr("_.count > 5")}, root: map[string]any{"count": 2}, want: false},
 		{name: "additional var", cond: &Condition{Expr: exprPtr("greeting == 'hi' && _.ok")}, root: map[string]any{"ok": true}, extra: map[string]any{"greeting": "hi"}, want: true},

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/google/cel-go/cel"
 	"gopkg.in/yaml.v3"
 )
 
@@ -263,7 +264,7 @@ func (c Condition) MarshalJSON() ([]byte, error) {
 
 // Evaluate compiles and evaluates the condition in one shot, with rootData
 // bound to "_" (declared dyn; see BuildCELContext). rootData may be a
-// LazyMap. A nil Condition or nil Expr returns ErrNoCondition. A non-boolean
+// LazyMap; nil binds "_" to null. A nil Condition or nil Expr returns ErrNoCondition. A non-boolean
 // result is an error.
 func (c *Condition) Evaluate(ctx context.Context, rootData any) (bool, error) {
 	return c.EvaluateWithAdditionalVars(ctx, rootData, nil)
@@ -278,6 +279,12 @@ func (c *Condition) EvaluateWithAdditionalVars(ctx context.Context, rootData any
 		return false, err
 	}
 	envOpts, vars := BuildCELContext(rootData, additionalVars)
+	if _, bound := vars["_"]; !bound {
+		// BuildCELContext omits "_" for nil root data; a condition always
+		// has "_", so bind it to null (e.g. `_ == null` is valid).
+		envOpts = append(envOpts, cel.Variable("_", cel.DynType))
+		vars["_"] = nil
+	}
 	prog, err := expr.Compile(envOpts, WithContext(ctx))
 	if err != nil {
 		return false, fmt.Errorf("condition evaluation failed: %w\nAvailable variables: %s",
