@@ -314,6 +314,8 @@ func TestCondition_Evaluate(t *testing.T) {
 		wantErr string
 	}{
 		{name: "nil root is null", cond: &Condition{Expr: exprPtr("_ == null")}, want: true},
+		{name: "extra var cannot replace root", cond: &Condition{Expr: exprPtr("_.role == 'admin'")}, root: map[string]any{"role": "user"}, extra: map[string]any{"_": map[string]any{"role": "admin"}}, wantErr: `must not set "_"`},
+		{name: "extra var cannot set root when nil", cond: &Condition{Expr: exprPtr("_.role == 'admin'")}, extra: map[string]any{"_": map[string]any{"role": "admin"}}, wantErr: `must not set "_"`},
 		{name: "nil root with extra", cond: &Condition{Expr: exprPtr("_ == null && x == 1")}, extra: map[string]any{"x": 1}, want: true},
 		{name: "nil root with self", cond: &Condition{Expr: exprPtr("_ == null && __self == 2")}, self: 2, useSelf: true, want: true},
 		{name: "root equality", cond: &Condition{Expr: exprPtr("_.env == 'prod'")}, root: map[string]any{"env": "prod"}, want: true},

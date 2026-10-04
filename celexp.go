@@ -449,11 +449,22 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 	if keyResult.env != nil {
 		adapter = keyResult.env.CELTypeAdapter()
 	}
+	// The cache key cannot identify a custom type adapter (cel.CustomTypeAdapter),
+	// so programs built with one are never cached: a hit could return a
+	// program (and adapter) built for a different adapter.
+	// ponytail: custom-adapter compiles skip the cache; key on a caller-supplied
+	// adapter identity if that cost ever matters.
+	_, defaultAdapter := adapter.(*types.Registry)
+	cacheable := adapter == nil || defaultAdapter
 
-	// Try to get from cache. The cache key does not cover custom type
-	// adapters, so the adapter is taken from the cached entry (stored with
-	// its program) rather than from this call's environment.
-	if prog, found := config.cache.Get(keyResult.key); found {
+	// Try to get from cache. Default-adapter programs are stored with their
+	// registry, which a hit reuses so lazy and eager values adapt alike.
+	var prog cel.Program
+	var found bool
+	if cacheable {
+		prog, found = config.cache.Get(keyResult.key)
+	}
+	if found {
 		if ap, ok := prog.(adaptedProgram); ok {
 			adapter = ap.adapter
 		}
@@ -473,7 +484,6 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 	}
 
 	// Cache miss - create program from the AST we already have
-	var prog cel.Program
 	var err error
 
 	// Create program with cost limit if specified
@@ -513,7 +523,9 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 	}
 
 	// Store in cache, paired with the adapter it was built with.
-	config.cache.Put(keyResult.key, adaptedProgram{Program: prog, adapter: adapter}, string(e))
+	if cacheable {
+		config.cache.Put(keyResult.key, adaptedProgram{Program: prog, adapter: adapter}, string(e))
+	}
 
 	return &CompileResult{
 		Program:      prog,

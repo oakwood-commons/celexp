@@ -271,12 +271,19 @@ func (c *Condition) Evaluate(ctx context.Context, rootData any) (bool, error) {
 }
 
 // EvaluateWithAdditionalVars is Evaluate with extra top-level variables.
+// additionalVars must not contain "_" (an error), which is reserved for
+// rootData.
 // Values may be lazy as described on EvalBool; neither rootData nor
 // additionalVars is modified.
 func (c *Condition) EvaluateWithAdditionalVars(ctx context.Context, rootData any, additionalVars map[string]any) (bool, error) {
 	expr, err := c.Expression()
 	if err != nil {
 		return false, err
+	}
+	if _, clash := additionalVars["_"]; clash {
+		// "_" is reserved for rootData; letting an extra var replace it would
+		// let a caller-supplied value stand in for the root (fail open).
+		return false, errors.New(`condition evaluation failed: additionalVars must not set "_" (reserved for root data)`)
 	}
 	envOpts, vars := BuildCELContext(rootData, additionalVars)
 	if _, bound := vars["_"]; !bound {

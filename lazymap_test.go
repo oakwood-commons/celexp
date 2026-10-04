@@ -133,11 +133,19 @@ func TestLazyMap_CachedAdapterConsistency(t *testing.T) {
 	}
 	vars := map[string]any{"x": customFact{"v"}, "_": LazyMap{"f": func() any { return customFact{"v"} }}}
 	for _, a := range []prefixAdapter{"A:", "B:"} {
-		prog, err := Expression(`x == _.f`).Compile(decls(a), WithCache(cache))
+		prog, err := Expression(`x == _.f && _.f == "`+string(a)+`v"`).Compile(decls(a), WithCache(cache))
 		require.NoError(t, err)
 		got, err := prog.EvalBool(context.Background(), vars)
 		require.NoError(t, err)
 		assert.True(t, got, "adapter %s", a)
+	}
+	// Same expression with a second adapter must not reuse the first's program.
+	for _, a := range []prefixAdapter{"A:", "B:"} {
+		prog, err := Expression(`_.f == "A:v"`).Compile(decls(a), WithCache(cache))
+		require.NoError(t, err)
+		got, err := prog.EvalBool(context.Background(), vars)
+		require.NoError(t, err)
+		assert.Equal(t, a == "A:", got, "adapter %s honored", a)
 	}
 }
 
