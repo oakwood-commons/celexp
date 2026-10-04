@@ -149,6 +149,27 @@ func TestLazyMap_CachedAdapterConsistency(t *testing.T) {
 	}
 }
 
+func TestLazyMap_CacheSkipsCustomAdapters(t *testing.T) {
+	cache := NewProgramCache(10)
+	compile := func(opts ...cel.EnvOption) {
+		t.Helper()
+		_, err := Expression(`_.f == 1`).Compile(lazyRootEnv(opts...), WithCache(cache))
+		require.NoError(t, err)
+	}
+	// A separate types.Registry is a custom adapter too, as is any other type.
+	reg, err := types.NewRegistry()
+	require.NoError(t, err)
+	compile(cel.CustomTypeAdapter(reg))
+	compile(cel.CustomTypeAdapter(prefixAdapter("A:")))
+	assert.Equal(t, 0, cache.Stats().Size, "custom adapters are never cached")
+
+	compile()
+	compile()
+	st := cache.Stats()
+	assert.Equal(t, 1, st.Size, "default adapter is cached")
+	assert.Equal(t, uint64(1), st.Hits)
+}
+
 func TestLazyMap_NilAliases(t *testing.T) {
 	var lm LazyMap
 	prog, err := Expression(`a == b && size(a) == 0`).CompileWithVarDecls([]VarDecl{NewVarDecl("a", cel.DynType), NewVarDecl("b", cel.DynType)})

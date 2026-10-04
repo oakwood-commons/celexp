@@ -446,16 +446,18 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 	}
 
 	var adapter types.Adapter
+	cacheable := true
 	if keyResult.env != nil {
 		adapter = keyResult.env.CELTypeAdapter()
+		// The cache key cannot identify a custom type adapter
+		// (cel.CustomTypeAdapter, including a separate types.Registry), so
+		// programs built with one are never cached: a hit could return a
+		// program (and adapter) built for a different adapter. The default
+		// adapter is the env's own provider registry.
+		// ponytail: custom-adapter compiles skip the cache; key on a
+		// caller-supplied adapter identity if that cost ever matters.
+		cacheable = any(adapter) == any(keyResult.env.CELTypeProvider())
 	}
-	// The cache key cannot identify a custom type adapter (cel.CustomTypeAdapter),
-	// so programs built with one are never cached: a hit could return a
-	// program (and adapter) built for a different adapter.
-	// ponytail: custom-adapter compiles skip the cache; key on a caller-supplied
-	// adapter identity if that cost ever matters.
-	_, defaultAdapter := adapter.(*types.Registry)
-	cacheable := adapter == nil || defaultAdapter
 
 	// Try to get from cache. Default-adapter programs are stored with their
 	// registry, which a hit reuses so lazy and eager values adapt alike.

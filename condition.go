@@ -295,7 +295,7 @@ func (c *Condition) EvaluateWithAdditionalVars(ctx context.Context, rootData any
 	prog, err := expr.Compile(envOpts, WithContext(ctx))
 	if err != nil {
 		return false, fmt.Errorf("condition evaluation failed: %w\nAvailable variables: %s",
-			err, describeAvailableVars(rootData, additionalVars))
+			err, describeAvailableVars(true, additionalVars)) // non-nil root: "_" is always bound here
 	}
 	ok, err := prog.EvalBool(ctx, vars)
 	if err != nil {

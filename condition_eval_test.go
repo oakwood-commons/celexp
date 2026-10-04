@@ -325,6 +325,7 @@ func TestCondition_Evaluate(t *testing.T) {
 		{name: "self null", cond: &Condition{Expr: exprPtr("__self == null")}, self: nil, useSelf: true, want: true},
 		{name: "non-bool result", cond: &Condition{Expr: exprPtr("_.count + 1")}, root: map[string]any{"count": 5}, wantErr: "boolean"},
 		{name: "undeclared var", cond: &Condition{Expr: exprPtr("nope")}, root: map[string]any{"a": 1}, wantErr: "condition evaluation failed"},
+		{name: "undeclared var, nil root lists _", cond: &Condition{Expr: exprPtr("nope")}, wantErr: "Available variables: _"},
 	}
 
 	for _, tt := range tests {
