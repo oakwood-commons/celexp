@@ -445,18 +445,19 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		return nil, fmt.Errorf("failed to compile expression %q: %w", e, keyResult.err)
 	}
 
+	// The cache key cannot identify a custom type adapter
+	// (cel.CustomTypeAdapter, including a separate types.Registry), so
+	// programs built with one are never stored: a hit could otherwise return
+	// a program (and adapter) built for a different adapter. With no envOpts
+	// the env (and adapter) is only known after a miss, so that path decides
+	// before Put; only default-adapter programs are ever stored or hit.
+	// ponytail: custom-adapter compiles skip the cache; key on a
+	// caller-supplied adapter identity if that cost ever matters.
 	var adapter types.Adapter
 	cacheable := true
 	if keyResult.env != nil {
 		adapter = keyResult.env.CELTypeAdapter()
-		// The cache key cannot identify a custom type adapter
-		// (cel.CustomTypeAdapter, including a separate types.Registry), so
-		// programs built with one are never cached: a hit could return a
-		// program (and adapter) built for a different adapter. The default
-		// adapter is the env's own provider registry.
-		// ponytail: custom-adapter compiles skip the cache; key on a
-		// caller-supplied adapter identity if that cost ever matters.
-		cacheable = any(adapter) == any(keyResult.env.CELTypeProvider())
+		cacheable = hasDefaultAdapter(keyResult.env)
 	}
 
 	// Try to get from cache. Default-adapter programs are stored with their
@@ -518,6 +519,7 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 
 		prog, err = celEnv.Program(ast, progOpts...)
 		adapter = celEnv.CELTypeAdapter()
+		cacheable = hasDefaultAdapter(celEnv)
 	}
 
 	if err != nil {
@@ -640,6 +642,15 @@ func (r *CompileResult) EvalWithContext(ctx context.Context, vars map[string]any
 	// Null.Value() returns structpb.NullValue_NULL_VALUE (integer 0), silently
 	// coercing an explicit null into 0 for direct callers of Eval/EvalWithContext.
 	return conversion.NullSafeValue(out), nil
+}
+
+// hasDefaultAdapter reports whether env uses cel-go's default type adapter:
+// its own provider registry. Only *types.Registry pointers are compared, so
+// arbitrary (possibly non-comparable) adapter types cannot panic.
+func hasDefaultAdapter(env *cel.Env) bool {
+	a, ok := env.CELTypeAdapter().(*types.Registry)
+	p, okp := env.CELTypeProvider().(*types.Registry)
+	return ok && okp && a == p
 }
 
 // isCostLimitError checks if an evaluation error is a cost limit exceeded error.

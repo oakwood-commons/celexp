@@ -170,6 +170,30 @@ func TestLazyMap_CacheSkipsCustomAdapters(t *testing.T) {
 	assert.Equal(t, uint64(1), st.Hits)
 }
 
+// With no envOpts the adapter is known only after the env factory builds the
+// env on a miss; a factory's custom adapter must still not be cached.
+func TestLazyMap_CacheSkipsFactoryCustomAdapter(t *testing.T) {
+	envFactoryMu.Lock()
+	origFactory, origInitialized := envFactory, envFactoryInitialized
+	envFactory = func(_ context.Context, opts ...cel.EnvOption) (*cel.Env, error) {
+		return cel.NewEnv(append(opts, cel.CustomTypeAdapter(prefixAdapter("F:")))...)
+	}
+	envFactoryInitialized = true
+	envFactoryMu.Unlock()
+	t.Cleanup(func() {
+		envFactoryMu.Lock()
+		envFactory, envFactoryInitialized = origFactory, origInitialized
+		envFactoryMu.Unlock()
+	})
+
+	cache := NewProgramCache(10)
+	for range 2 {
+		_, err := Expression(`1 == 1`).Compile(nil, WithCache(cache))
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 0, cache.Stats().Size)
+}
+
 func TestLazyMap_NilAliases(t *testing.T) {
 	var lm LazyMap
 	prog, err := Expression(`a == b && size(a) == 0`).CompileWithVarDecls([]VarDecl{NewVarDecl("a", cel.DynType), NewVarDecl("b", cel.DynType)})
