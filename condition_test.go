@@ -115,6 +115,14 @@ func TestCondition_Unmarshal(t *testing.T) {
 	}
 }
 
+func TestCondition_UnmarshalJSONDirectMalformed(t *testing.T) {
+	for _, in := range []string{`{"expr":"true"`, `{"expr":"true"} garbage`} {
+		var c Condition
+		assert.Error(t, c.UnmarshalJSON([]byte(in)), in)
+		assert.Nil(t, c.Expr, in)
+	}
+}
+
 func TestCondition_RoundTrip(t *testing.T) {
 	tests := []struct {
 		name     string

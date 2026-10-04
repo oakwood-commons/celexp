@@ -172,6 +172,9 @@ func (c *Condition) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("invalid condition: expected boolean, string, or object {\"expr\": \"...\"}: %w", err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
+	if !json.Valid(data) { // direct callers: reject truncated or trailing input
+		return badShape(errors.New("malformed JSON"))
+	}
 	if tok, err := dec.Token(); err != nil {
 		return badShape(err)
 	} else if tok != json.Delim('{') {
