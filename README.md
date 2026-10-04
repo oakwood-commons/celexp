@@ -79,7 +79,7 @@ free of any application dependency:
 
 ## Package layout
 
-- `celexp` (root) -- `Expression`, `Condition`, `ExtFunction`, `ProgramCache`,
+- `celexp` (root) -- `Expression`, `Condition`, `LazyMap`, `ExtFunction`, `ProgramCache`,
   `EvaluateExpression`, compile/evaluate/validate, the logger seam.
 - `conversion` -- Go <-> CEL value conversion helpers.
 - `detail` -- function detail/documentation builders.
@@ -193,6 +193,49 @@ ok, err := prog.EvalBool(ctx, map[string]any{
 ```
 
 For one-shot evaluation with root data bound to `_`, use `cond.Evaluate`.
+
+### Lazy maps
+
+cel-go defers only top-level variables: a plain map of lazy funcs bound to
+`_` is resolved as a whole as soon as `_.a` is read. `celexp.LazyMap`
+defers each entry instead. Its values may be `func() (any, error)`,
+`func() any`, or plain values; declare the variable as `map(string, dyn)`
+(or pass it as `rootData` to `cond.Evaluate`). LazyMaps may be nested, inside
+each other or inside ordinary `map[string]any` values.
+
+```go
+facts := celexp.LazyMap{
+    "env":   func() (any, error) { return detectEnv() },
+    "quota": func() (any, error) { return fetchQuota(ctx) }, // never runs below
+}
+ok, err := cond.Evaluate(ctx, facts) // when: "has(_.quota) && _.env == 'prod'"
+```
+
+- Reading `_.a` (or `_["a"]`) runs only `a`'s func, at most once per
+  evaluation; an entry that is never read never runs.
+- `has(_.a)`, `'a' in _`, and `size(_)` never run a func.
+- A func's error fails the evaluation, wrapped (`errors.Is`/`errors.As`).
+- Resolved values are adapted like eager vars (maps, lists, nested LazyMaps).
+- **Iterating** the map with a single-variable macro (`all`/`exists`/
+  `exists_one`/`map`/`filter`) resolves every entry. `==` is pointer
+  identity of the per-evaluation view (`_ == _` is true; a LazyMap never
+  equals a map literal) and resolves nothing. Converting or returning the
+  whole map is an error and resolves nothing.
+- **Limitation:** the view is not a full CEL map, so passing the LazyMap
+  itself to a function with a map parameter (the `map.*` extension
+  functions, `format`), two-variable comprehensions, and `transformMap`
+  fail with an evaluation error. Pass its entries (`_.a`) or an ordinary
+  map instead. (Making it a full map would make `has(_.a)` resolve the
+  entry.)
+- A LazyMap holds no state. Each evaluation wraps it in a fresh, concurrency-
+  safe resolver whose memo lives only for that evaluation, so one LazyMap can
+  be reused across evaluations and goroutines without leaking an earlier
+  result (its funcs must then be safe to call concurrently).
+
+LazyMap is honored by `EvalBool` and the `Condition` `Evaluate*` helpers. The
+design follows Kubernetes' `lazy.MapValue` (`k8s.io/apiserver/pkg/cel/lazy`),
+with stricter defaults: presence checks do not resolve, memoization is
+per-evaluation, and resolution is concurrency-safe.
 
 ## Development
 

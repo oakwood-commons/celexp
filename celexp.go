@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
 	"github.com/oakwood-commons/celexp/conversion"
 )
 
@@ -356,6 +357,10 @@ type CompileResult struct {
 	// envOpts stores the environment options used during compilation.
 	// This enables variable type extraction and validation.
 	envOpts []cel.EnvOption
+
+	// adapter is the compile environment's type adapter, used to adapt
+	// values resolved lazily from a LazyMap. Nil means the default adapter.
+	adapter types.Adapter
 }
 
 // Compile parses, checks, and compiles a CEL expression into an executable program.
@@ -433,6 +438,11 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		return nil, fmt.Errorf("failed to compile expression %q: %w", e, keyResult.err)
 	}
 
+	var adapter types.Adapter
+	if keyResult.env != nil {
+		adapter = keyResult.env.CELTypeAdapter()
+	}
+
 	// Try to get from cache
 	if prog, found := config.cache.Get(keyResult.key); found {
 		return &CompileResult{
@@ -441,6 +451,7 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 			costLimit:    *config.costLimit,
 			declaredVars: nil, // Use CompileWithVarDecls() for variable type tracking
 			envOpts:      envOpts,
+			adapter:      adapter,
 		}, nil
 	}
 
@@ -482,6 +493,7 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		}
 
 		prog, err = celEnv.Program(ast, progOpts...)
+		adapter = celEnv.CELTypeAdapter()
 	}
 
 	if err != nil {
@@ -497,6 +509,7 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		costLimit:    *config.costLimit,
 		declaredVars: nil, // Use CompileWithVarDecls() for variable type tracking
 		envOpts:      envOpts,
+		adapter:      adapter,
 	}, nil
 }
 
@@ -588,7 +601,8 @@ func (r *CompileResult) EvalWithContext(ctx context.Context, vars map[string]any
 	if r.costLimit > 0 && details != nil {
 		if ac := details.ActualCost(); ac != nil {
 			lgr := loggerFromContext(ctx)
-			lgr.V(2).Info("CEL expression evaluated",
+			lgr.V(2).Info(
+				"CEL expression evaluated",
 				"expression", truncateExpr(string(r.Expression), 120),
 				"actualCost", *ac,
 				"costLimit", r.costLimit,

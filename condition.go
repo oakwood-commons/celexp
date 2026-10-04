@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/google/cel-go/common/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -238,32 +237,36 @@ func (c Condition) MarshalJSON() ([]byte, error) {
 }
 
 // Evaluate compiles and evaluates the condition in one shot, with rootData
-// bound to "_" (see EvaluateExpression). A nil Condition or nil Expr returns
-// ErrNoCondition. A non-boolean result is an error.
-func (c *Condition) Evaluate(ctx context.Context, rootData map[string]any) (bool, error) {
+// bound to "_" (declared dyn; see BuildCELContext). rootData may be a
+// LazyMap. A nil Condition or nil Expr returns ErrNoCondition. A non-boolean
+// result is an error.
+func (c *Condition) Evaluate(ctx context.Context, rootData any) (bool, error) {
 	return c.EvaluateWithAdditionalVars(ctx, rootData, nil)
 }
 
-// EvaluateWithAdditionalVars is Evaluate with extra top-level variables,
-// which may be lazy as described on EvalBool. additionalVars is not modified.
-func (c *Condition) EvaluateWithAdditionalVars(ctx context.Context, rootData, additionalVars map[string]any) (bool, error) {
+// EvaluateWithAdditionalVars is Evaluate with extra top-level variables.
+// Values may be lazy as described on EvalBool; neither rootData nor
+// additionalVars is modified.
+func (c *Condition) EvaluateWithAdditionalVars(ctx context.Context, rootData any, additionalVars map[string]any) (bool, error) {
 	expr, err := c.Expression()
 	if err != nil {
 		return false, err
 	}
-	vars, factErr := lazyVars(additionalVars)
-	result, err := EvaluateExpression(ctx, string(expr), rootData, vars)
-	if ferr := factErr(); ferr != nil {
-		return false, fmt.Errorf("condition evaluation failed: %w", ferr)
+	envOpts, vars := BuildCELContext(rootData, additionalVars)
+	prog, err := expr.Compile(envOpts, WithContext(ctx))
+	if err != nil {
+		return false, fmt.Errorf("condition evaluation failed: %w\nAvailable variables: %s",
+			err, describeAvailableVars(rootData, additionalVars))
 	}
+	ok, err := prog.EvalBool(ctx, vars)
 	if err != nil {
 		return false, fmt.Errorf("condition evaluation failed: %w", err)
 	}
-	return asBool(result)
+	return ok, nil
 }
 
 // EvaluateWithSelf is Evaluate with VarSelf (__self) bound to self.
-func (c *Condition) EvaluateWithSelf(ctx context.Context, rootData map[string]any, self any) (bool, error) {
+func (c *Condition) EvaluateWithSelf(ctx context.Context, rootData, self any) (bool, error) {
 	return c.EvaluateWithAdditionalVars(ctx, rootData, map[string]any{VarSelf: self})
 }
 
@@ -273,43 +276,24 @@ func (c *Condition) EvaluateWithSelf(ctx context.Context, rootData map[string]an
 // vars may hold lazily computed values as func() any, func() ref.Val, or
 // func() (any, error): the function runs only when the expression reads that
 // variable (so a short-circuited branch never computes it), at most once per
-// evaluation. vars itself is never modified. If a func() (any, error) returns
-// an error, evaluation fails with an error wrapping it, even when CEL's
-// commutative ||/&& would otherwise have absorbed it.
+// evaluation. A LazyMap value (top-level or nested in map[string]any values)
+// defers each of its entries the same way. vars itself is never modified. If
+// a func() (any, error) returns an error, evaluation fails with an error
+// wrapping it, even when CEL's commutative ||/&& would otherwise have
+// absorbed it.
 func (r *CompileResult) EvalBool(ctx context.Context, vars map[string]any) (bool, error) {
-	act, factErr := lazyVars(vars)
+	if r == nil {
+		return false, fmt.Errorf("compile result or program is nil")
+	}
+	act, ev := bindVars(vars, r.adapter)
 	result, err := r.EvalWithContext(ctx, act)
-	if ferr := factErr(); ferr != nil {
+	if ferr := ev.factErr(); ferr != nil {
 		return false, fmt.Errorf("failed to evaluate expression %q: %w", r.Expression, ferr)
 	}
 	if err != nil {
 		return false, err
 	}
 	return asBool(result)
-}
-
-// lazyVars returns a shallow copy of vars, so cel-go's memoization of lazy
-// values writes into the copy, with each func() (any, error) adapted to a lazy
-// func() any. The returned func reports the first fact error.
-func lazyVars(vars map[string]any) (act map[string]any, factErr func() error) {
-	var firstErr error
-	act = make(map[string]any, len(vars))
-	for name, v := range vars {
-		if fact, ok := v.(func() (any, error)); ok {
-			v = func() any {
-				val, err := fact()
-				if err != nil {
-					if firstErr == nil {
-						firstErr = fmt.Errorf("variable %q: %w", name, err)
-					}
-					return types.WrapErr(err)
-				}
-				return val
-			}
-		}
-		act[name] = v
-	}
-	return act, func() error { return firstErr }
 }
 
 func asBool(v any) (bool, error) {

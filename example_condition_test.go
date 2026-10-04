@@ -46,3 +46,27 @@ func ExampleCondition() {
 	fmt.Println(ok, lookups)
 	// Output: true 0
 }
+
+// ExampleLazyMap evaluates a condition against root data whose entries are
+// computed only when read.
+func ExampleLazyMap() {
+	var ran []string
+	fact := func(name string, v any) func() (any, error) {
+		return func() (any, error) { ran = append(ran, name); return v, nil }
+	}
+	facts := celexp.LazyMap{
+		"env":   fact("env", "prod"),
+		"quota": fact("quota", 100), // presence check only: never runs
+	}
+
+	cond := celexp.Condition{}
+	if err := yaml.Unmarshal([]byte(`"has(_.quota) && _.env == 'prod'"`), &cond); err != nil {
+		panic(err)
+	}
+	ok, err := cond.Evaluate(context.Background(), facts)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(ok, ran)
+	// Output: true [env]
+}
