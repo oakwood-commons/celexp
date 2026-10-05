@@ -4,6 +4,7 @@
 package celexp
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -121,13 +122,23 @@ func bindVars(vars map[string]any, adapter types.Adapter) (map[string]any, *lazy
 // factFunc returns a fact (func() (any, error), func() ref.Val, func() any,
 // or a CEL error value) as a func() (any, error), or nil for a plain value.
 // Every fact runs through call, so an error from any of them is recorded.
+// A nil func of a fact shape is never called: it yields errNilFact.
 func factFunc(v any) func() (any, error) {
 	switch f := v.(type) {
 	case func() (any, error):
+		if f == nil {
+			return nilFact
+		}
 		return f
 	case func() ref.Val:
+		if f == nil {
+			return nilFact
+		}
 		return func() (any, error) { return f(), nil }
 	case func() any:
+		if f == nil {
+			return nilFact
+		}
 		return func() (any, error) { return f(), nil }
 	case ref.Val:
 		if types.IsError(f) {
@@ -136,6 +147,10 @@ func factFunc(v any) func() (any, error) {
 	}
 	return nil
 }
+
+var errNilFact = errors.New("nil func")
+
+func nilFact() (any, error) { return nil, errNilFact }
 
 // call runs a fact and adapts its value, recording any error (prefixed with
 // label) as the evaluation's error.

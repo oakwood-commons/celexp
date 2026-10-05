@@ -332,6 +332,27 @@ func TestLazyMap_UnconvertibleValues(t *testing.T) {
 	}
 }
 
+// A nil func of any fact shape fails cleanly when read, without calling it.
+func TestLazyMap_NilFuncs(t *testing.T) {
+	var fe func() (any, error)
+	var fr func() ref.Val
+	var fa func() any
+	for name, nilFn := range map[string]any{"func() (any, error)": fe, "func() ref.Val": fr, "func() any": fa} {
+		t.Run(name, func(t *testing.T) {
+			_, err := evalLazy(t, `_.bad || true`, LazyMap{"bad": nilFn})
+			require.ErrorIs(t, err, errNilFact)
+			assert.Contains(t, err.Error(), `lazy map key "bad": nil func`)
+			assert.NotContains(t, err.Error(), "internal error")
+
+			prog, err := Expression(`bad || true`).CompileWithVarDecls([]VarDecl{NewVarDecl("bad", cel.BoolType)})
+			require.NoError(t, err)
+			_, err = prog.EvalBool(context.Background(), map[string]any{"bad": nilFn})
+			require.ErrorIs(t, err, errNilFact)
+			assert.Contains(t, err.Error(), `variable "bad": nil func`)
+		})
+	}
+}
+
 // The fail-closed guarantee covers each variable and LazyMap entry itself.
 // Values nested inside an ordinary map an entry returns follow standard CEL
 // semantics: || may absorb their errors. This pins that documented boundary
