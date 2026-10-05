@@ -16,6 +16,7 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/ext"
+	"github.com/google/cel-go/test/proto3pb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -233,7 +234,8 @@ func (customAdapter) NativeToValue(v any) ref.Val {
 
 func TestLazyMap_CustomAdapter(t *testing.T) {
 	opts := lazyRootEnv(cel.CustomTypeAdapter(customAdapter{}))
-	for _, pass := range []string{"cache miss", "cache hit"} {
+	// Custom adapters bypass the cache, so both compiles build a program.
+	for _, pass := range []string{"first compile", "second compile"} {
 		t.Run(pass, func(t *testing.T) {
 			prog, err := Expression(`_.f == "custom:x"`).Compile(opts)
 			require.NoError(t, err)
@@ -269,18 +271,31 @@ func TestLazyMap_NestedLaziness(t *testing.T) {
 	assert.IsType(t, LazyMap{}, vars["facts"].(map[string]any)["lm"], "caller's map not modified")
 }
 
+// A CEL error value from any fact shape (or given as a plain value) fails
+// the evaluation instead of being absorbed by ||.
 func TestLazyMap_RefValErrors(t *testing.T) {
 	sentinel := errors.New("refval boom")
-	bad := func() ref.Val { return types.WrapErr(sentinel) }
+	errVal := types.WrapErr(sentinel)
+	shapes := map[string]any{
+		"func() ref.Val": func() ref.Val { return errVal },
+		"func() any":     func() any { return errVal },
+		"func() (any, error)": func() (any, error) {
+			return errVal, nil
+		},
+		"plain value": errVal,
+	}
+	for name, bad := range shapes {
+		t.Run(name, func(t *testing.T) {
+			_, err := evalLazy(t, `_.bad || true`, LazyMap{"bad": bad})
+			require.ErrorIs(t, err, sentinel, "lazy map error not absorbed by ||")
+			assert.Contains(t, err.Error(), `lazy map key "bad"`)
 
-	_, err := evalLazy(t, `_.bad || true`, LazyMap{"bad": bad})
-	require.ErrorIs(t, err, sentinel, "lazy map ref.Val error not absorbed by ||")
-	assert.Contains(t, err.Error(), `lazy map key "bad"`)
-
-	prog, err := Expression(`bad || true`).CompileWithVarDecls([]VarDecl{NewVarDecl("bad", cel.BoolType)})
-	require.NoError(t, err)
-	_, err = prog.EvalBool(context.Background(), map[string]any{"bad": bad})
-	require.ErrorIs(t, err, sentinel, "top-level ref.Val error not absorbed by ||")
+			prog, err := Expression(`bad || true`).CompileWithVarDecls([]VarDecl{NewVarDecl("bad", cel.BoolType)})
+			require.NoError(t, err)
+			_, err = prog.EvalBool(context.Background(), map[string]any{"bad": bad})
+			require.ErrorIs(t, err, sentinel, "top-level error not absorbed by ||")
+		})
+	}
 
 	got, err := evalLazy(t, `_.ok`, LazyMap{"ok": func() ref.Val { return types.True }})
 	require.NoError(t, err)
@@ -453,8 +468,31 @@ func TestLazyMap_NoConversion(t *testing.T) {
 	prog, err := Expression(`_`).CompileWithVarDecls(lazyRootDecls())
 	require.NoError(t, err)
 	_, err = prog.EvalBool(context.Background(), map[string]any{"_": root})
-	require.Error(t, err)
+	require.ErrorContains(t, err, "returned a lazy map")
+	act, _ := bindVars(map[string]any{"_": root}, nil)
+	_, err = prog.EvalWithContext(context.Background(), act)
+	require.ErrorContains(t, err, "returned a lazy map", "direct eval reports an error, not an error value")
 	assert.Equal(t, int32(0), a.Load(), "no callbacks run")
+}
+
+// A cacheable hit must adapt lazy values with the registry the cached
+// program was built with, like the eager values that program adapts. The
+// second env lacks the proto type; its compile still hits because the cache
+// key ignores registered types (#20), so only the stored registry knows it.
+func TestLazyMap_CacheHitRestoresAdapter(t *testing.T) {
+	cache := NewProgramCache(10)
+	msg := func() any { return &proto3pb.TestAllTypes{SingleInt64: 1} }
+	vars := map[string]any{"x": msg(), "_": LazyMap{"f": msg}}
+	withType := lazyRootEnv(cel.Variable("x", cel.DynType), cel.Types(&proto3pb.TestAllTypes{}))
+	without := lazyRootEnv(cel.Variable("x", cel.DynType))
+	for i, opts := range [][]cel.EnvOption{withType, without} {
+		prog, err := Expression(`x == _.f`).Compile(opts, WithCache(cache))
+		require.NoError(t, err)
+		require.Equal(t, uint64(i), cache.Stats().Hits)
+		got, err := prog.EvalBool(context.Background(), vars)
+		require.NoError(t, err, "compile %d", i)
+		assert.True(t, got, "compile %d", i)
+	}
 }
 
 func TestLazyMap_ConditionEvaluate(t *testing.T) {

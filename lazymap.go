@@ -27,7 +27,8 @@ import (
 //
 //   - _.a / _["a"] runs only a's func, never b's; an entry never read never runs.
 //   - has(_.a), 'a' in _, and size(_) never run a func.
-//   - A func's error fails the evaluation with an error wrapping the original.
+//   - A func's error, or a CEL error value from any entry, fails the
+//     evaluation with an error wrapping the original.
 //   - Resolved values are adapted like eager vars (maps, lists, nested
 //     LazyMaps).
 //
@@ -51,8 +52,7 @@ import (
 // result. Its funcs must be safe to call concurrently if evaluations run
 // concurrently.
 //
-// Entries may also be func() ref.Val; an error value it returns fails the
-// evaluation like a func() (any, error) error. The design follows Kubernetes'
+// Entries may also be func() ref.Val. The design follows Kubernetes'
 // lazy.MapValue (k8s.io/apiserver/pkg/cel/lazy),
 // with stricter defaults: presence checks do not resolve, memoization is per
 // evaluation, resolution is concurrency-safe, and errors are wrapped.
@@ -96,24 +96,44 @@ func bindVars(vars map[string]any, adapter types.Adapter) (map[string]any, *lazy
 	ev := &lazyEval{adapter: adapter}
 	act := make(map[string]any, len(vars))
 	for name, v := range vars {
-		switch f := v.(type) {
-		case func() (any, error):
+		if f := factFunc(v); f != nil {
 			act[name] = func() any { return ev.call(fmt.Sprintf("variable %q", name), f) }
-		case func() ref.Val:
-			act[name] = func() any { return ev.call(fmt.Sprintf("variable %q", name), refValFact(f)) }
-		case func() any:
-			act[name] = func() any { return ev.bind(f()) }
-		default:
+		} else {
 			act[name] = ev.bind(v)
 		}
 	}
 	return act, ev
 }
 
-// call runs a fallible fact, recording its error (prefixed with label) as
-// the evaluation's error.
+// factFunc returns a fact (func() (any, error), func() ref.Val, func() any,
+// or a CEL error value) as a func() (any, error), or nil for a plain value.
+// Every fact runs through call, so an error from any of them is recorded.
+func factFunc(v any) func() (any, error) {
+	switch f := v.(type) {
+	case func() (any, error):
+		return f
+	case func() ref.Val:
+		return func() (any, error) { return f(), nil }
+	case func() any:
+		return func() (any, error) { return f(), nil }
+	case ref.Val:
+		if types.IsError(f) {
+			return func() (any, error) { return f, nil }
+		}
+	}
+	return nil
+}
+
+// call runs a fact, recording its error (prefixed with label) as the
+// evaluation's error. A CEL error value it returns counts as an error, so
+// CEL's commutative ||/&& cannot absorb it.
 func (ev *lazyEval) call(label string, f func() (any, error)) any {
 	val, err := f()
+	if rv, ok := val.(ref.Val); ok && err == nil && types.IsError(rv) {
+		if err, ok = rv.(error); !ok {
+			err = fmt.Errorf("%v", rv)
+		}
+	}
 	if err != nil {
 		ev.mu.Lock()
 		if ev.err == nil {
@@ -123,19 +143,6 @@ func (ev *lazyEval) call(label string, f func() (any, error)) any {
 		return types.WrapErr(err)
 	}
 	return ev.bind(val)
-}
-
-// refValFact adapts a func() ref.Val fact so an error value it returns is
-// recorded like a func() (any, error) error instead of being absorbable by
-// CEL's commutative ||/&&.
-func refValFact(f func() ref.Val) func() (any, error) {
-	return func() (any, error) {
-		v := f()
-		if e, ok := v.(*types.Err); ok {
-			return nil, e.Unwrap()
-		}
-		return v, nil
-	}
 }
 
 // factErr returns the first fact error of the evaluation, if any.
@@ -226,14 +233,9 @@ func (m *lazyMapVal) resolve(key string) ref.Val {
 	if !ok {
 		return types.NewErr("no such key: %s", key)
 	}
-	switch f := raw.(type) {
-	case func() (any, error):
+	if f := factFunc(raw); f != nil {
 		raw = m.ev.call(fmt.Sprintf("lazy map key %q", key), f)
-	case func() any:
-		raw = m.ev.bind(f())
-	case func() ref.Val:
-		raw = m.ev.call(fmt.Sprintf("lazy map key %q", key), refValFact(f))
-	default:
+	} else {
 		raw = m.ev.bind(raw)
 	}
 	v := m.ev.adapter.NativeToValue(raw)

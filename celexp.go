@@ -636,6 +636,11 @@ func (r *CompileResult) EvalWithContext(ctx context.Context, vars map[string]any
 		}
 	}
 
+	// A LazyMap view is never materialized, so it cannot be a result.
+	if _, ok := out.(*lazyMapVal); ok {
+		return nil, fmt.Errorf("expression %q returned a lazy map, which is never materialized; return one of its entries instead", r.Expression)
+	}
+
 	// Normalize a CEL null result to Go nil. Without this, cel-go's
 	// Null.Value() returns structpb.NullValue_NULL_VALUE (integer 0), silently
 	// coercing an explicit null into 0 for direct callers of Eval/EvalWithContext.
