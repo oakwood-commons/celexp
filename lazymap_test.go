@@ -332,6 +332,24 @@ func TestLazyMap_UnconvertibleValues(t *testing.T) {
 	}
 }
 
+// The fail-closed guarantee covers each variable and LazyMap entry itself.
+// Values nested inside an ordinary map an entry returns follow standard CEL
+// semantics: || may absorb their errors. This pins that documented boundary
+// so a change to it is deliberate.
+func TestLazyMap_NestedPlainValuesFollowCEL(t *testing.T) {
+	sentinel := errors.New("nested boom")
+	nested := map[string]any{"bad": types.WrapErr(sentinel), "ch": make(chan int)}
+	for _, expr := range []string{`_.obj.bad || true`, `_.obj.ch || true`} {
+		got, err := evalLazy(t, expr, LazyMap{"obj": func() any { return nested }})
+		require.NoError(t, err, expr)
+		assert.True(t, got, expr)
+	}
+
+	// Wrapping the value in a LazyMap entry brings it under the guarantee.
+	_, err := evalLazy(t, `_.obj.bad || true`, LazyMap{"obj": LazyMap{"bad": types.WrapErr(sentinel)}})
+	require.ErrorIs(t, err, sentinel)
+}
+
 func TestLazyMap_Errors(t *testing.T) {
 	sentinel := errors.New("boom")
 	var ok atomic.Int32

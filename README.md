@@ -175,7 +175,10 @@ expression reads them, at most once per evaluation. A fact's error (or a CEL
 error value it yields, or a value CEL cannot convert) fails the evaluation and
 is wrapped, so
 `errors.Is`/`errors.As` work on the result, even where `||`/`&&` would
-otherwise absorb it. The
+otherwise absorb it. This applies to each variable and `LazyMap` entry
+itself; values nested inside an ordinary map, list, or struct follow standard
+CEL semantics, so put anything that can fail in a func or a `LazyMap` entry.
+The
 caller's vars map is never modified, so it can be reused:
 
 ```go
@@ -220,7 +223,9 @@ ok, err := cond.Evaluate(ctx, facts) // when: "has(_.quota) && _.env == 'prod'"
   evaluation; an entry that is never read never runs.
 - `has(_.a)`, `'a' in _`, and `size(_)` never run a func.
 - A func's error, a CEL error value, or a value CEL cannot convert, from
-  any entry, fails the evaluation, wrapped (`errors.Is`/`errors.As`).
+  any entry, fails the evaluation, wrapped (`errors.Is`/`errors.As`). Values
+  nested inside an ordinary map, list, or struct an entry holds follow
+  standard CEL semantics (`||`/`&&` may absorb their errors).
 - Resolved values are adapted like eager vars (maps, lists, nested LazyMaps).
 - **Iterating** the map with a single-variable macro (`all`/`exists`/
   `exists_one`/`map`/`filter`) resolves each entry as it is visited; a

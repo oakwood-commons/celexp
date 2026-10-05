@@ -320,7 +320,9 @@ func (c *Condition) EvaluateWithSelf(ctx context.Context, rootData, self any) (b
 // a func() (any, error) returns an error, or any variable read yields a CEL
 // error value or a value CEL cannot convert, evaluation fails with an error
 // wrapping it, even when CEL's commutative ||/&& would otherwise have
-// absorbed it.
+// absorbed it. This applies to each variable and LazyMap entry itself;
+// values nested inside an ordinary map, list, or struct follow standard CEL
+// semantics (put a value that can fail in a func or a LazyMap entry).
 func (r *CompileResult) EvalBool(ctx context.Context, vars map[string]any) (bool, error) {
 	if r == nil {
 		return false, fmt.Errorf("compile result or program is nil")

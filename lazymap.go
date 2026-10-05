@@ -31,6 +31,10 @@ import (
 //   - has(_.a), 'a' in _, and size(_) never run a func.
 //   - A func's error, a CEL error value, or a value CEL cannot convert, from
 //     any entry, fails the evaluation with an error wrapping the original.
+//     This covers the entry itself, not values nested inside an ordinary
+//     map, list, or struct it returns: those follow standard CEL semantics,
+//     where ||/&& may absorb an error. Make an entry that can fail a func
+//     or a nested LazyMap entry.
 //   - Resolved values are adapted like eager vars (maps, lists, nested
 //     LazyMaps).
 //
