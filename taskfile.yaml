@@ -4,12 +4,12 @@ version: "3"
 
 vars:
   NAME: "celexp"
-  DEFAULT_GO_VERSION: "1.26.0"
-  GOLANGCI_LINT_VERSION: "v2.13.2"
-  GOIMPORTS_VERSION: "v0.42.0"
-  GOFUMPT_VERSION: "v0.9.2"
-  GOVULNCHECK_VERSION: "v1.7.0"
-  BENCHSTAT_VERSION: "v0.0.0-20260312031701-16a31bc5fbd0"
+  DEFAULT_GO_VERSION: "1.27.1"
+  GOLANGCI_LINT_VERSION: "v2.14.0"
+  GOIMPORTS_VERSION: "v0.51.0"
+  GOFUMPT_VERSION: "v0.12.0"
+  GOVULNCHECK_VERSION: "v1.8.0"
+  BENCHSTAT_VERSION: "v0.0.0-20260929162123-406019bb8b68"
   TOOLS: "{{.ROOT_DIR | toSlash}}/.tool"
   TOOLS_BIN: "{{.TOOLS}}"
   PATH_SEP: '{{ if eq OS "windows" }};{{ else }}:{{ end }}'
@@ -127,20 +127,25 @@ tasks:
     run: once
     env:
       GOBIN: "{{.TOOLS_BIN}}"
-      GOTOOLCHAIN: "local"
       PATH: "{{.TOOLS_PATH}}{{.PATH_SEP}}{{ env `PATH` }}"
     cmds:
       - |
         set -e
         export PATH="{{.TOOLS_PATH}}{{.PATH_SEP}}$PATH"
-        export GOTOOLCHAIN=local
         mkdir -p "{{.TOOLS_BIN}}"
 
         install_tool() {
           local name="$1"
           local pkg="$2"
-          if ! command -v "$name" >/dev/null 2>&1; then
-            echo "[install] $name"
+          # Reinstall unless .tool holds the pinned version built with the
+          # project's Go toolchain; a stale or global binary may reject config
+          # written for the pin, or fail to load packages needing newer Go.
+          local bin="{{.TOOLS_BIN}}/$name{{exeExt}}"
+          local info
+          info="$(go version -m "$bin" 2>/dev/null || true)"
+          if ! printf '%s\n' "$info" | grep -qE "^[[:space:]]+mod[[:space:]].*[[:space:]]${pkg##*@}([[:space:]]|$)" ||
+             ! printf '%s\n' "$info" | head -1 | grep -qF ": go{{.GO_VERSION}}"; then
+            echo "[install] $name ${pkg##*@}"
             go install "$pkg"
           fi
         }
