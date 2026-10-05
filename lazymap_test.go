@@ -149,6 +149,9 @@ func TestLazyMap_CachedAdapterConsistency(t *testing.T) {
 	}
 }
 
+// wrappedRegistry is a custom type provider and adapter (not a *types.Registry).
+type wrappedRegistry struct{ *types.Registry }
+
 func TestLazyMap_CacheSkipsCustomAdapters(t *testing.T) {
 	cache := NewProgramCache(10)
 	compile := func(opts ...cel.EnvOption) {
@@ -161,6 +164,9 @@ func TestLazyMap_CacheSkipsCustomAdapters(t *testing.T) {
 	require.NoError(t, err)
 	compile(cel.CustomTypeAdapter(reg))
 	compile(cel.CustomTypeAdapter(prefixAdapter("A:")))
+	// One custom object installed as both provider and adapter.
+	both := wrappedRegistry{reg}
+	compile(cel.CustomTypeProvider(both), cel.CustomTypeAdapter(both))
 	assert.Equal(t, 0, cache.Stats().Size, "custom adapters are never cached")
 
 	compile()
