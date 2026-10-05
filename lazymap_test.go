@@ -302,6 +302,36 @@ func TestLazyMap_RefValErrors(t *testing.T) {
 	assert.True(t, got)
 }
 
+// A Go value the CEL adapter cannot convert fails the evaluation instead of
+// its adapter error being absorbed by ||.
+func TestLazyMap_UnconvertibleValues(t *testing.T) {
+	ch := make(chan int)
+	shapes := map[string]any{
+		"func() any":          func() any { return ch },
+		"func() (any, error)": func() (any, error) { return ch, nil },
+		"plain value":         ch,
+	}
+	for name, bad := range shapes {
+		t.Run(name, func(t *testing.T) {
+			_, err := evalLazy(t, `_.bad || true`, LazyMap{"bad": bad})
+			require.Error(t, err, "lazy map adapter error not absorbed by ||")
+			assert.Contains(t, err.Error(), `lazy map key "bad"`)
+
+			prog, err := Expression(`bad || true`).CompileWithVarDecls([]VarDecl{NewVarDecl("bad", cel.BoolType)})
+			require.NoError(t, err)
+			_, err = prog.EvalBool(context.Background(), map[string]any{"bad": bad})
+			require.Error(t, err, "top-level adapter error not absorbed by ||")
+			assert.Contains(t, err.Error(), `variable "bad"`)
+
+			ok, err := Expression(`true`).CompileWithVarDecls(nil)
+			require.NoError(t, err)
+			got, err := ok.EvalBool(context.Background(), map[string]any{"bad": bad})
+			require.NoError(t, err, "unread unconvertible value is not an error")
+			assert.True(t, got)
+		})
+	}
+}
+
 func TestLazyMap_Errors(t *testing.T) {
 	sentinel := errors.New("boom")
 	var ok atomic.Int32

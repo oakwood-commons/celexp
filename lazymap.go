@@ -29,8 +29,8 @@ import (
 //
 //   - _.a / _["a"] runs only a's func, never b's; an entry never read never runs.
 //   - has(_.a), 'a' in _, and size(_) never run a func.
-//   - A func's error, or a CEL error value from any entry, fails the
-//     evaluation with an error wrapping the original.
+//   - A func's error, a CEL error value, or a value CEL cannot convert, from
+//     any entry, fails the evaluation with an error wrapping the original.
 //   - Resolved values are adapted like eager vars (maps, lists, nested
 //     LazyMaps).
 //
@@ -98,11 +98,18 @@ func bindVars(vars map[string]any, adapter types.Adapter) (map[string]any, *lazy
 	ev := &lazyEval{adapter: adapter}
 	act := make(map[string]any, len(vars))
 	for name, v := range vars {
+		label := fmt.Sprintf("variable %q", name)
 		if f := factFunc(v); f != nil {
-			act[name] = func() any { return ev.call(fmt.Sprintf("variable %q", name), f) }
-		} else {
-			act[name] = ev.bind(v)
+			act[name] = func() any { return ev.call(label, f) }
+			continue
 		}
+		b := ev.bind(v)
+		if rv := adapter.NativeToValue(b); types.IsError(rv) {
+			// Unconvertible value: record the error only if it is read.
+			act[name] = func() any { return ev.adapt(label, rv) }
+			continue
+		}
+		act[name] = b
 	}
 	return act, ev
 }
@@ -126,25 +133,39 @@ func factFunc(v any) func() (any, error) {
 	return nil
 }
 
-// call runs a fact, recording its error (prefixed with label) as the
-// evaluation's error. A CEL error value it returns counts as an error, so
-// CEL's commutative ||/&& cannot absorb it.
-func (ev *lazyEval) call(label string, f func() (any, error)) any {
+// call runs a fact and adapts its value, recording any error (prefixed with
+// label) as the evaluation's error.
+func (ev *lazyEval) call(label string, f func() (any, error)) ref.Val {
 	val, err := f()
-	if rv, ok := val.(ref.Val); ok && err == nil && types.IsError(rv) {
-		if err, ok = rv.(error); !ok {
-			err = fmt.Errorf("%v", rv)
-		}
-	}
 	if err != nil {
-		ev.mu.Lock()
-		if ev.err == nil {
-			ev.err = fmt.Errorf("%s: %w", label, err)
-		}
-		ev.mu.Unlock()
+		ev.record(label, err)
 		return types.WrapErr(err)
 	}
-	return ev.bind(val)
+	return ev.adapt(label, val)
+}
+
+// adapt converts a lazy value to CEL. A CEL error value, whether returned by
+// the fact or produced by an unconvertible Go value, is recorded so CEL's
+// commutative ||/&& cannot absorb it.
+func (ev *lazyEval) adapt(label string, val any) ref.Val {
+	rv := ev.adapter.NativeToValue(ev.bind(val))
+	if types.IsError(rv) {
+		err, ok := rv.(error)
+		if !ok {
+			err = fmt.Errorf("%v", rv)
+		}
+		ev.record(label, err)
+	}
+	return rv
+}
+
+// record keeps the first error of the evaluation.
+func (ev *lazyEval) record(label string, err error) {
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	if ev.err == nil {
+		ev.err = fmt.Errorf("%s: %w", label, err)
+	}
 }
 
 // factErr returns the first fact error of the evaluation, if any.
@@ -235,12 +256,13 @@ func (m *lazyMapVal) resolve(key string) ref.Val {
 	if !ok {
 		return types.NewErr("no such key: %s", key)
 	}
+	label := fmt.Sprintf("lazy map key %q", key)
+	var v ref.Val
 	if f := factFunc(raw); f != nil {
-		raw = m.ev.call(fmt.Sprintf("lazy map key %q", key), f)
+		v = m.ev.call(label, f)
 	} else {
-		raw = m.ev.bind(raw)
+		v = m.ev.adapt(label, raw)
 	}
-	v := m.ev.adapter.NativeToValue(raw)
 	m.done[key] = v
 	return v
 }

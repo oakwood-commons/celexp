@@ -317,9 +317,10 @@ func (c *Condition) EvaluateWithSelf(ctx context.Context, rootData, self any) (b
 // variable (so a short-circuited branch never computes it), at most once per
 // evaluation. A LazyMap value (top-level or nested in map[string]any values)
 // defers each of its entries the same way. vars itself is never modified. If
-// a func() (any, error) returns an error, or any fact yields a CEL error
-// value, evaluation fails with an error wrapping it, even when CEL's
-// commutative ||/&& would otherwise have absorbed it.
+// a func() (any, error) returns an error, or any variable read yields a CEL
+// error value or a value CEL cannot convert, evaluation fails with an error
+// wrapping it, even when CEL's commutative ||/&& would otherwise have
+// absorbed it.
 func (r *CompileResult) EvalBool(ctx context.Context, vars map[string]any) (bool, error) {
 	if r == nil {
 		return false, fmt.Errorf("compile result or program is nil")

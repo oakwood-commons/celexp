@@ -172,7 +172,8 @@ Compile once with your own declarations and options, then evaluate. A
 non-boolean result is an error, never a silent `false`. Variables may be lazy
 -- `func() any` or `func() (any, error)` -- and are computed only if the
 expression reads them, at most once per evaluation. A fact's error (or a CEL
-error value it yields) fails the evaluation and is wrapped, so
+error value it yields, or a value CEL cannot convert) fails the evaluation and
+is wrapped, so
 `errors.Is`/`errors.As` work on the result, even where `||`/`&&` would
 otherwise absorb it. The
 caller's vars map is never modified, so it can be reused:
@@ -218,8 +219,8 @@ ok, err := cond.Evaluate(ctx, facts) // when: "has(_.quota) && _.env == 'prod'"
 - Reading `_.a` (or `_["a"]`) runs only `a`'s func, at most once per
   evaluation; an entry that is never read never runs.
 - `has(_.a)`, `'a' in _`, and `size(_)` never run a func.
-- A func's error, or a CEL error value from any entry, fails the
-  evaluation, wrapped (`errors.Is`/`errors.As`).
+- A func's error, a CEL error value, or a value CEL cannot convert, from
+  any entry, fails the evaluation, wrapped (`errors.Is`/`errors.As`).
 - Resolved values are adapted like eager vars (maps, lists, nested LazyMaps).
 - **Iterating** the map with a single-variable macro (`all`/`exists`/
   `exists_one`/`map`/`filter`) resolves each entry as it is visited; a
