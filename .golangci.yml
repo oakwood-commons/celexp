@@ -14,7 +14,7 @@ linters:
     - exhaustive
     - gochecknoinits
     - goheader
-    - gomodguard
+    - gomodguard_v2
     - goprintffuncname
     - importas
     - makezero
@@ -64,7 +64,8 @@ formatters:
     - goimports
   settings:
     gofumpt:
-      extra-rules: true
+      extra:
+        group-params: true
   exclusions:
     generated: lax
     paths:
