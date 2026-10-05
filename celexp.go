@@ -447,17 +447,27 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 
 	// The cache key cannot identify a custom type adapter
 	// (cel.CustomTypeAdapter, including a separate types.Registry), so
-	// programs built with one are never stored: a hit could otherwise return
-	// a program (and adapter) built for a different adapter. With no envOpts
-	// the env (and adapter) is only known after a miss, so that path decides
-	// before Put; only default-adapter programs are ever stored or hit.
+	// programs built with one are never stored or looked up: a hit could
+	// otherwise return a program (and adapter) built for a different adapter.
+	// Only default-adapter programs are ever stored or hit. Without envOpts
+	// the key carries no env, so a factory env (which may supply a custom
+	// adapter) is built before the lookup; plain cel.NewEnv() is the default.
 	// ponytail: custom-adapter compiles skip the cache; key on a
-	// caller-supplied adapter identity if that cost ever matters.
+	// caller-supplied adapter identity if that cost ever matters (see #20).
+	env, ast := keyResult.env, keyResult.ast
+	if env == nil {
+		if factory := getEnvFactory(); factory != nil {
+			var err error
+			if env, err = factory(config.ctx, envOpts...); err != nil {
+				return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+			}
+		}
+	}
 	var adapter types.Adapter
 	cacheable := true
-	if keyResult.env != nil {
-		adapter = keyResult.env.CELTypeAdapter()
-		cacheable = hasDefaultAdapter(keyResult.env)
+	if env != nil {
+		adapter = env.CELTypeAdapter()
+		cacheable = hasDefaultAdapter(env)
 	}
 
 	// Try to get from cache. Default-adapter programs are stored with their
@@ -495,33 +505,21 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		progOpts = append(progOpts, cel.CostLimit(*config.costLimit))
 	}
 
-	if keyResult.ast != nil && keyResult.env != nil {
-		// Reuse the compiled AST from key generation - NO RECOMPILATION
-		prog, err = keyResult.env.Program(keyResult.ast, progOpts...)
-	} else {
-		// Fallback: compile from scratch if AST not available
-		// Use the environment factory if available (includes all custom extensions)
-		var celEnv *cel.Env
-		factory := getEnvFactory()
-		if factory != nil {
-			celEnv, err = factory(config.ctx, envOpts...)
-		} else {
-			celEnv, err = cel.NewEnv(envOpts...)
-		}
-		if err != nil {
+	if env == nil {
+		if env, err = cel.NewEnv(envOpts...); err != nil {
 			return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 		}
-
-		ast, issues := celEnv.Compile(string(e))
+		adapter = env.CELTypeAdapter()
+	}
+	if ast == nil {
+		// No AST from key generation: compile it now.
+		var issues *cel.Issues
+		ast, issues = env.Compile(string(e))
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("failed to compile expression %q: %w", e, issues.Err())
 		}
-
-		prog, err = celEnv.Program(ast, progOpts...)
-		adapter = celEnv.CELTypeAdapter()
-		cacheable = hasDefaultAdapter(celEnv)
 	}
-
+	prog, err = env.Program(ast, progOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create program for expression %q: %w", e, err)
 	}

@@ -176,15 +176,17 @@ func TestLazyMap_CacheSkipsCustomAdapters(t *testing.T) {
 	assert.Equal(t, uint64(1), st.Hits)
 }
 
-// With no envOpts the adapter is known only after the env factory builds the
-// env on a miss; a factory's custom adapter must still not be cached.
+// With no envOpts the key carries no env; a factory env that supplies a
+// custom adapter must neither be stored nor hit an entry stored earlier by a
+// default-adapter compile under the same key.
 func TestLazyMap_CacheSkipsFactoryCustomAdapter(t *testing.T) {
+	setFactory := func(f func(context.Context, ...cel.EnvOption) (*cel.Env, error)) {
+		envFactoryMu.Lock()
+		envFactory, envFactoryInitialized = f, f != nil
+		envFactoryMu.Unlock()
+	}
 	envFactoryMu.Lock()
 	origFactory, origInitialized := envFactory, envFactoryInitialized
-	envFactory = func(_ context.Context, opts ...cel.EnvOption) (*cel.Env, error) {
-		return cel.NewEnv(append(opts, cel.CustomTypeAdapter(prefixAdapter("F:")))...)
-	}
-	envFactoryInitialized = true
 	envFactoryMu.Unlock()
 	t.Cleanup(func() {
 		envFactoryMu.Lock()
@@ -193,11 +195,22 @@ func TestLazyMap_CacheSkipsFactoryCustomAdapter(t *testing.T) {
 	})
 
 	cache := NewProgramCache(10)
+	setFactory(nil)
+	_, err := Expression(`1 == 1`).Compile(nil, WithCache(cache))
+	require.NoError(t, err)
+	require.Equal(t, 1, cache.Stats().Size, "default compile is cached")
+
+	setFactory(func(_ context.Context, opts ...cel.EnvOption) (*cel.Env, error) {
+		return cel.NewEnv(append(opts, cel.CustomTypeAdapter(prefixAdapter("F:")))...)
+	})
 	for range 2 {
-		_, err := Expression(`1 == 1`).Compile(nil, WithCache(cache))
+		r, err := Expression(`1 == 1`).Compile(nil, WithCache(cache))
 		require.NoError(t, err)
+		assert.Equal(t, prefixAdapter("F:"), r.adapter, "factory adapter used")
 	}
-	assert.Equal(t, 0, cache.Stats().Size)
+	st := cache.Stats()
+	assert.Equal(t, uint64(0), st.Hits, "no hit on the default-adapter entry")
+	assert.Equal(t, 1, st.Size, "custom-adapter program not stored")
 }
 
 func TestLazyMap_NilAliases(t *testing.T) {
@@ -254,6 +267,24 @@ func TestLazyMap_NestedLaziness(t *testing.T) {
 	assert.Equal(t, int32(0), x.Load())
 	assert.Equal(t, int32(1), y.Load())
 	assert.IsType(t, LazyMap{}, vars["facts"].(map[string]any)["lm"], "caller's map not modified")
+}
+
+func TestLazyMap_RefValErrors(t *testing.T) {
+	sentinel := errors.New("refval boom")
+	bad := func() ref.Val { return types.WrapErr(sentinel) }
+
+	_, err := evalLazy(t, `_.bad || true`, LazyMap{"bad": bad})
+	require.ErrorIs(t, err, sentinel, "lazy map ref.Val error not absorbed by ||")
+	assert.Contains(t, err.Error(), `lazy map key "bad"`)
+
+	prog, err := Expression(`bad || true`).CompileWithVarDecls([]VarDecl{NewVarDecl("bad", cel.BoolType)})
+	require.NoError(t, err)
+	_, err = prog.EvalBool(context.Background(), map[string]any{"bad": bad})
+	require.ErrorIs(t, err, sentinel, "top-level ref.Val error not absorbed by ||")
+
+	got, err := evalLazy(t, `_.ok`, LazyMap{"ok": func() ref.Val { return types.True }})
+	require.NoError(t, err)
+	assert.True(t, got)
 }
 
 func TestLazyMap_Errors(t *testing.T) {
