@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
 	"github.com/oakwood-commons/celexp/conversion"
 )
 
@@ -336,6 +337,13 @@ func ClearDefaultCache() {
 	GetDefaultCache().Clear()
 }
 
+// adaptedProgram is a cached program paired with the type adapter of the
+// environment that built it.
+type adaptedProgram struct {
+	cel.Program
+	adapter types.Adapter
+}
+
 // CompileResult contains the compiled CEL program and metadata
 type CompileResult struct {
 	// Program is the compiled CEL program ready for evaluation
@@ -356,6 +364,10 @@ type CompileResult struct {
 	// envOpts stores the environment options used during compilation.
 	// This enables variable type extraction and validation.
 	envOpts []cel.EnvOption
+
+	// adapter is the compile environment's type adapter, used to adapt
+	// values resolved lazily from a LazyMap. Nil means the default adapter.
+	adapter types.Adapter
 }
 
 // Compile parses, checks, and compiles a CEL expression into an executable program.
@@ -433,14 +445,49 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		return nil, fmt.Errorf("failed to compile expression %q: %w", e, keyResult.err)
 	}
 
-	// Try to get from cache
-	if prog, found := config.cache.Get(keyResult.key); found {
+	// The cache key cannot identify a custom type adapter
+	// (cel.CustomTypeAdapter, including a separate types.Registry), so
+	// programs built with one are never stored or looked up: a hit could
+	// otherwise return a program (and adapter) built for a different adapter.
+	// Only default-adapter programs are ever stored or hit. Without envOpts
+	// the key carries no env, so a factory env (which may supply a custom
+	// adapter) is built before the lookup; plain cel.NewEnv() is the default.
+	// ponytail: custom-adapter compiles skip the cache; key on a
+	// caller-supplied adapter identity if that cost ever matters (see #20).
+	env, ast := keyResult.env, keyResult.ast
+	if env == nil {
+		if factory := getEnvFactory(); factory != nil {
+			var err error
+			if env, err = factory(config.ctx, envOpts...); err != nil {
+				return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+			}
+		}
+	}
+	var adapter types.Adapter
+	cacheable := true
+	if env != nil {
+		adapter = env.CELTypeAdapter()
+		cacheable = hasDefaultAdapter(env)
+	}
+
+	// Try to get from cache. Default-adapter programs are stored with their
+	// registry, which a hit reuses so lazy and eager values adapt alike.
+	var prog cel.Program
+	var found bool
+	if cacheable {
+		prog, found = config.cache.Get(keyResult.key)
+	}
+	if found {
+		if ap, ok := prog.(adaptedProgram); ok {
+			adapter = ap.adapter
+		}
 		return &CompileResult{
 			Program:      prog,
 			Expression:   e,
 			costLimit:    *config.costLimit,
 			declaredVars: nil, // Use CompileWithVarDecls() for variable type tracking
 			envOpts:      envOpts,
+			adapter:      adapter,
 		}, nil
 	}
 
@@ -450,7 +497,6 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 	}
 
 	// Cache miss - create program from the AST we already have
-	var prog cel.Program
 	var err error
 
 	// Create program with cost limit if specified
@@ -459,37 +505,29 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		progOpts = append(progOpts, cel.CostLimit(*config.costLimit))
 	}
 
-	if keyResult.ast != nil && keyResult.env != nil {
-		// Reuse the compiled AST from key generation - NO RECOMPILATION
-		prog, err = keyResult.env.Program(keyResult.ast, progOpts...)
-	} else {
-		// Fallback: compile from scratch if AST not available
-		// Use the environment factory if available (includes all custom extensions)
-		var celEnv *cel.Env
-		factory := getEnvFactory()
-		if factory != nil {
-			celEnv, err = factory(config.ctx, envOpts...)
-		} else {
-			celEnv, err = cel.NewEnv(envOpts...)
-		}
-		if err != nil {
+	if env == nil {
+		if env, err = cel.NewEnv(envOpts...); err != nil {
 			return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 		}
-
-		ast, issues := celEnv.Compile(string(e))
+		adapter = env.CELTypeAdapter()
+	}
+	if ast == nil {
+		// No AST from key generation: compile it now.
+		var issues *cel.Issues
+		ast, issues = env.Compile(string(e))
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("failed to compile expression %q: %w", e, issues.Err())
 		}
-
-		prog, err = celEnv.Program(ast, progOpts...)
 	}
-
+	prog, err = env.Program(ast, progOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create program for expression %q: %w", e, err)
 	}
 
-	// Store in cache
-	config.cache.Put(keyResult.key, prog, string(e))
+	// Store in cache, paired with the adapter it was built with.
+	if cacheable {
+		config.cache.Put(keyResult.key, adaptedProgram{Program: prog, adapter: adapter}, string(e))
+	}
 
 	return &CompileResult{
 		Program:      prog,
@@ -497,6 +535,7 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		costLimit:    *config.costLimit,
 		declaredVars: nil, // Use CompileWithVarDecls() for variable type tracking
 		envOpts:      envOpts,
+		adapter:      adapter,
 	}, nil
 }
 
@@ -588,7 +627,8 @@ func (r *CompileResult) EvalWithContext(ctx context.Context, vars map[string]any
 	if r.costLimit > 0 && details != nil {
 		if ac := details.ActualCost(); ac != nil {
 			lgr := loggerFromContext(ctx)
-			lgr.V(2).Info("CEL expression evaluated",
+			lgr.V(2).Info(
+				"CEL expression evaluated",
 				"expression", truncateExpr(string(r.Expression), 120),
 				"actualCost", *ac,
 				"costLimit", r.costLimit,
@@ -596,10 +636,24 @@ func (r *CompileResult) EvalWithContext(ctx context.Context, vars map[string]any
 		}
 	}
 
+	// A LazyMap view is never materialized, so it cannot be a result.
+	if _, ok := out.(*lazyMapVal); ok {
+		return nil, fmt.Errorf("expression %q returned a lazy map, which is never materialized; return one of its entries instead", r.Expression)
+	}
+
 	// Normalize a CEL null result to Go nil. Without this, cel-go's
 	// Null.Value() returns structpb.NullValue_NULL_VALUE (integer 0), silently
 	// coercing an explicit null into 0 for direct callers of Eval/EvalWithContext.
 	return conversion.NullSafeValue(out), nil
+}
+
+// hasDefaultAdapter reports whether env uses cel-go's default type adapter:
+// its own provider registry. Only *types.Registry pointers are compared, so
+// arbitrary (possibly non-comparable) adapter types cannot panic.
+func hasDefaultAdapter(env *cel.Env) bool {
+	a, ok := env.CELTypeAdapter().(*types.Registry)
+	p, okp := env.CELTypeProvider().(*types.Registry)
+	return ok && okp && a == p
 }
 
 // isCostLimitError checks if an evaluation error is a cost limit exceeded error.
