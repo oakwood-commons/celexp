@@ -139,8 +139,11 @@ tasks:
         install_tool() {
           local name="$1"
           local pkg="$2"
-          if ! command -v "$name" >/dev/null 2>&1; then
-            echo "[install] $name"
+          # Reinstall unless .tool holds exactly the pinned version; a stale
+          # or global binary may reject config written for the pin.
+          local bin="{{.TOOLS_BIN}}/$name{{exeExt}}"
+          if ! go version -m "$bin" 2>/dev/null | grep -qE "^[[:space:]]+mod[[:space:]].*[[:space:]]${pkg##*@}([[:space:]]|$)"; then
+            echo "[install] $name ${pkg##*@}"
             go install "$pkg"
           fi
         }
