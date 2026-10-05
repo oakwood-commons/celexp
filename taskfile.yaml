@@ -127,22 +127,24 @@ tasks:
     run: once
     env:
       GOBIN: "{{.TOOLS_BIN}}"
-      GOTOOLCHAIN: "local"
       PATH: "{{.TOOLS_PATH}}{{.PATH_SEP}}{{ env `PATH` }}"
     cmds:
       - |
         set -e
         export PATH="{{.TOOLS_PATH}}{{.PATH_SEP}}$PATH"
-        export GOTOOLCHAIN=local
         mkdir -p "{{.TOOLS_BIN}}"
 
         install_tool() {
           local name="$1"
           local pkg="$2"
-          # Reinstall unless .tool holds exactly the pinned version; a stale
-          # or global binary may reject config written for the pin.
+          # Reinstall unless .tool holds the pinned version built with the
+          # project's Go toolchain; a stale or global binary may reject config
+          # written for the pin, or fail to load packages needing newer Go.
           local bin="{{.TOOLS_BIN}}/$name{{exeExt}}"
-          if ! go version -m "$bin" 2>/dev/null | grep -qE "^[[:space:]]+mod[[:space:]].*[[:space:]]${pkg##*@}([[:space:]]|$)"; then
+          local info
+          info="$(go version -m "$bin" 2>/dev/null || true)"
+          if ! printf '%s\n' "$info" | grep -qE "^[[:space:]]+mod[[:space:]].*[[:space:]]${pkg##*@}([[:space:]]|$)" ||
+             ! printf '%s\n' "$info" | head -1 | grep -qF ": go{{.GO_VERSION}}"; then
             echo "[install] $name ${pkg##*@}"
             go install "$pkg"
           fi
