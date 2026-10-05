@@ -198,8 +198,10 @@ For one-shot evaluation with root data bound to `_`, use `cond.Evaluate`.
 
 ### Lazy maps
 
-cel-go defers only top-level variables: a plain map of lazy funcs bound to
-`_` is resolved as a whole as soon as `_.a` is read. `celexp.LazyMap`
+cel-go defers only top-level variables: a func bound to `_` that returns a
+map computes the whole map as soon as `_.a` is read, and a func stored inside
+a plain map is not supported at all (reading it fails with an
+unsupported-conversion error). `celexp.LazyMap`
 defers each entry instead. Its values may be `func() (any, error)`,
 `func() any`, or plain values; declare the variable as `map(string, dyn)`
 (or pass it as `rootData` to `cond.Evaluate`). LazyMaps may be nested, inside

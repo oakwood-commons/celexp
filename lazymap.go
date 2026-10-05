@@ -19,8 +19,10 @@ import (
 // plain value used as-is. Declare the variable as map(string, dyn), e.g.
 // NewVarDecl("_", cel.MapType(cel.StringType, cel.DynType)).
 //
-// cel-go only defers top-level variables, so a plain map of lazy funcs is
-// resolved as a whole as soon as any key is read. A LazyMap, used as a vars
+// cel-go only defers top-level variables: a func bound as a variable computes
+// its whole value (e.g. a whole map) as soon as any key is read, and a func
+// stored inside a plain map is not supported at all (reading it fails with an
+// unsupported-conversion error). A LazyMap, used as a vars
 // value passed to EvalBool or the Condition Evaluate* helpers (top-level, or
 // nested inside another LazyMap or a map[string]any value), instead resolves
 // each entry on first access:
