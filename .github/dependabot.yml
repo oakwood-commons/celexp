@@ -6,9 +6,28 @@ updates:
       interval: weekly
     groups:
       go-dependencies:
+        applies-to: version-updates
         patterns:
           - "*"
+      go-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    ignore:
+      # v0.32.0+ switched module path to cel.dev/cel-go.
+      - dependency-name: "github.com/google/cel-go"
+        versions:
+          - ">= 0.32.0"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      ci-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      ci-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
