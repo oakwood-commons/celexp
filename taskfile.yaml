@@ -4,12 +4,12 @@ version: "3"
 
 vars:
   NAME: "celexp"
-  DEFAULT_GO_VERSION: "1.26.0"
-  GOLANGCI_LINT_VERSION: "v2.13.2"
-  GOIMPORTS_VERSION: "v0.42.0"
-  GOFUMPT_VERSION: "v0.9.2"
-  GOVULNCHECK_VERSION: "v1.7.0"
-  BENCHSTAT_VERSION: "v0.0.0-20260312031701-16a31bc5fbd0"
+  DEFAULT_GO_VERSION: "1.27.1"
+  GOLANGCI_LINT_VERSION: "v2.14.0"
+  GOIMPORTS_VERSION: "v0.51.0"
+  GOFUMPT_VERSION: "v0.12.0"
+  GOVULNCHECK_VERSION: "v1.8.0"
+  BENCHSTAT_VERSION: "v0.0.0-20260929162123-406019bb8b68"
   TOOLS: "{{.ROOT_DIR | toSlash}}/.tool"
   TOOLS_BIN: "{{.TOOLS}}"
   PATH_SEP: '{{ if eq OS "windows" }};{{ else }}:{{ end }}'
@@ -127,20 +127,26 @@ tasks:
     run: once
     env:
       GOBIN: "{{.TOOLS_BIN}}"
-      GOTOOLCHAIN: "local"
       PATH: "{{.TOOLS_PATH}}{{.PATH_SEP}}{{ env `PATH` }}"
     cmds:
       - |
         set -e
         export PATH="{{.TOOLS_PATH}}{{.PATH_SEP}}$PATH"
-        export GOTOOLCHAIN=local
         mkdir -p "{{.TOOLS_BIN}}"
 
         install_tool() {
           local name="$1"
           local pkg="$2"
-          if ! command -v "$name" >/dev/null 2>&1; then
-            echo "[install] $name"
+          # Reinstall unless .tool holds the pinned version built with the
+          # project's Go toolchain; a stale or global binary may reject config
+          # written for the pin, or fail to load packages needing newer Go.
+          local bin="{{.TOOLS_BIN}}/$name{{exeExt}}"
+          if ! go version -m "$bin" 2>/dev/null | awk -v go_ver="go{{.GO_VERSION}}" -v mod_ver="${pkg##*@}" '
+            NR == 1 && $NF == go_ver { ok_go = 1 }
+            $1 == "mod" && $3 == mod_ver { ok_mod = 1 }
+            END { exit !(ok_go && ok_mod) }
+          '; then
+            echo "[install] $name ${pkg##*@}"
             go install "$pkg"
           fi
         }
@@ -175,7 +181,7 @@ tasks:
           -print0 | xargs -0 goimports -w
         find . \
           -type d \( -name .cache -o -name .task -o -name .tool \) -prune -false \
-          -o -type f -name '*.go' -print0 | xargs -0 gofumpt -w -extra
+          -o -type f -name '*.go' -print0 | xargs -0 gofumpt -w -extra=balance_calls,clothe_returns,group_params
         go mod tidy
         echo "Formatting complete"
 
@@ -201,7 +207,7 @@ tasks:
 
         UNFORMATTED=$(find . \
           -type d \( -name .cache -o -name .task -o -name .tool \) -prune -false \
-          -o -type f -name '*.go' -print0 | xargs -0 gofumpt -l -extra 2>/dev/null || true)
+          -o -type f -name '*.go' -print0 | xargs -0 gofumpt -l -extra=balance_calls,clothe_returns,group_params 2>/dev/null || true)
         if [ -n "$UNFORMATTED" ]; then
           echo "gofumpt issues:"
           echo "$UNFORMATTED"
