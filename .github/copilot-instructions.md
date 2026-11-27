@@ -82,7 +82,7 @@ task ci            # full pipeline
   factory registration, and the debug-sink seam.
 - `ext/` -- the extension registry (`All`/`BuiltIn`/`Custom`) and namespace
   subpackages (`arrays`, `debug`, `celfilepath`, `guid`, `host`, `map`,
-  `marshalling`, `out`, `celregex`, `sort`, `celstrings`, `time`, `celurl`).
+  `marshalling`, `celmath`, `out`, `celregex`, `sort`, `celstrings`, `time`, `celurl`).
 - `bootstrap/` -- convenience `Default()` that wires the env/cache factories.
 - `internal/` -- moved leaf helpers (`compare`, `arrays`, `dnslabel`,
   `pathnorm`) with no external-consumer value.

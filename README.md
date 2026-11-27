@@ -92,7 +92,7 @@ free of any application dependency:
 ## Extension namespaces
 
 `arrays`, `debug`, `filepath`, `guid`, `host`, `map`, `marshalling` (`json.*` /
-`yaml.*`), `out`, `regex`, `sort`, `strings`, `time`, `url` -- plus cel-go's
+`yaml.*` / `frontmatter.*`), `out`, `regex`, `sort`, `strings`, `time`, `url` -- plus cel-go's
 own standard extensions (`lists`, `math`, `sets`, `encoders`, `protos`,
 `lang`, ...). Call `ext.Namespaces()` for the authoritative, sorted list.
 
@@ -103,9 +103,9 @@ explicitly per entry rather than derived from `Name`, because `Name` is not a
 uniform namespace: a `BuiltIn()` entry names a cel-go extension/option (e.g.
 `"strings"`, `"optionalTypes"`), while a `Custom()` entry names a
 fully-qualified function (e.g. `"regex.match"`). The overlap between cel-go's
-built-in `strings` extension and celexp's `strings.*` custom functions
-sharing the `strings` namespace is deliberate: allowlisting `"strings"` gets
-both.
+built-in `strings` and `math` extensions and celexp's `strings.*` and `math.*`
+custom functions sharing those namespaces is deliberate: allowlisting
+`"strings"` or `"math"` gets both.
 
 ## Restricted environments
 

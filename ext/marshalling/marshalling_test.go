@@ -607,6 +607,36 @@ func TestJsonYamlInterop(t *testing.T) {
 	assert.Equal(t, expected, result.Value())
 }
 
+func TestMarshalFuncs_CyclicAndCollisionErrors(t *testing.T) {
+	env, err := cel.NewEnv(
+		JSONMarshalFunc().EnvOptions[0],
+		JSONMarshalPrettyFunc().EnvOptions[0],
+		YamlMarshalFunc().EnvOptions[0],
+		cel.Variable("v", cel.DynType),
+	)
+	require.NoError(t, err)
+
+	cyclic := map[any]any{}
+	cyclic[int64(1)] = cyclic
+
+	dupKeys := map[any]any{int(1): "a", int64(1): "b"}
+
+	for _, expr := range []string{`json.marshal(v)`, `json.marshalPretty(v)`, `yaml.marshal(v)`} {
+		ast, iss := env.Compile(expr)
+		require.NoError(t, iss.Err())
+		prog, progErr := env.Program(ast)
+		require.NoError(t, progErr)
+
+		_, _, cycErr := prog.Eval(map[string]any{"v": cyclic})
+		require.Error(t, cycErr)
+		assert.Contains(t, cycErr.Error(), "cyclic value")
+
+		_, _, dupErr := prog.Eval(map[string]any{"v": dupKeys})
+		require.Error(t, dupErr)
+		assert.Contains(t, dupErr.Error(), "duplicate map key")
+	}
+}
+
 // Benchmark tests
 func BenchmarkJsonMarshal_CEL_SimpleMap(b *testing.B) {
 	fn := JSONMarshalFunc()

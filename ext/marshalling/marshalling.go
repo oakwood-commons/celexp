@@ -44,8 +44,10 @@ func JSONMarshalFunc() celexp.ExtFunction {
 					[]*cel.Type{cel.DynType},
 					cel.StringType,
 					cel.UnaryBinding(func(value ref.Val) ref.Val {
-						// Convert CEL value to Go value
-						goValue := conversion.CelValueToGo(value)
+						goValue, err := conversion.TryCelValueToGo(value)
+						if err != nil {
+							return types.NewErr("json.marshal: %s", err.Error())
+						}
 
 						// Marshal to JSON
 						jsonBytes, err := json.Marshal(goValue)
@@ -91,8 +93,10 @@ func JSONMarshalPrettyFunc() celexp.ExtFunction {
 					[]*cel.Type{cel.DynType},
 					cel.StringType,
 					cel.UnaryBinding(func(value ref.Val) ref.Val {
-						// Convert CEL value to Go value
-						goValue := conversion.CelValueToGo(value)
+						goValue, err := conversion.TryCelValueToGo(value)
+						if err != nil {
+							return types.NewErr("json.marshalPretty: %s", err.Error())
+						}
 
 						// Marshal to pretty JSON
 						jsonBytes, err := json.MarshalIndent(goValue, "", "  ")
@@ -196,8 +200,10 @@ func YamlMarshalFunc() celexp.ExtFunction {
 					[]*cel.Type{cel.DynType},
 					cel.StringType,
 					cel.UnaryBinding(func(value ref.Val) ref.Val {
-						// Convert CEL value to Go value
-						goValue := conversion.CelValueToGo(value)
+						goValue, err := conversion.TryCelValueToGo(value)
+						if err != nil {
+							return types.NewErr("yaml.marshal: %s", err.Error())
+						}
 
 						// Marshal to YAML
 						yamlBytes, err := yaml.Marshal(goValue)

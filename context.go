@@ -205,7 +205,10 @@ func EvaluateExpression(
 
 	// Convert CEL types to Go types (handles deep conversion for arrays, maps, etc.)
 	goResult := conversion.GoToCelValue(result)
-	convertedResult := conversion.CelValueToGo(goResult)
+	convertedResult, err := conversion.TryCelValueToGo(goResult)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert result of expression %q: %w", exprStr, err)
+	}
 
 	return convertedResult, nil
 }

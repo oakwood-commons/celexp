@@ -609,6 +609,144 @@ func TestCelValueToGo_NestedNull(t *testing.T) {
 	assert.Nil(t, actual, "nested null must not be coerced to 0")
 }
 
+func TestCelValueToGo_NonStringMapKeys(t *testing.T) {
+	t.Run("cel map literal with int keys", func(t *testing.T) {
+		out := evalCEL(t, "{80: 'http', 443: 'https'}")
+		got, ok := CelValueToGo(out).(map[any]any)
+		require.True(t, ok)
+		assert.Equal(t, map[any]any{
+			int64(80):  "http",
+			int64(443): "https",
+		}, got)
+	})
+
+	t.Run("nested non-string map keys inside string-keyed map", func(t *testing.T) {
+		out := evalCEL(t, "{'ports': {80: 'http', '8080': 'alt'}, 'flags': {true: 'on', 1u: 'first'}}")
+		outer, ok := CelValueToGo(out).(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, map[any]any{
+			int64(80): "http",
+			"8080":    "alt",
+		}, outer["ports"])
+		assert.Equal(t, map[any]any{
+			true:      "on",
+			uint64(1): "first",
+		}, outer["flags"])
+	})
+
+	t.Run("native map[any]any round-trips through GoToCelValue and CelValueToGo", func(t *testing.T) {
+		in := map[string]any{
+			"ports": map[any]any{
+				80:           "http",
+				uint(443):    "https",
+				float32(1.5): "ratio",
+				"8080":       "alt",
+			},
+			"labels": map[any]any{
+				"env": "prod",
+			},
+		}
+		got, ok := CelValueToGo(GoToCelValue(in)).(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, map[any]any{
+			int64(80):    "http",
+			uint64(443):  "https",
+			float64(1.5): "ratio",
+			"8080":       "alt",
+		}, got["ports"])
+		assert.Equal(t, map[string]any{"env": "prod"}, got["labels"])
+	})
+}
+
+func TestTryCelValueToGo_CyclesDepthBudgetAndKeyCollisions(t *testing.T) {
+	t.Run("cyclic map[any]any and map[string]any and slice", func(t *testing.T) {
+		anyCycle := map[any]any{}
+		anyCycle[int64(1)] = anyCycle
+
+		_, err := TryCelValueToGo(GoToCelValue(anyCycle))
+		require.ErrorIs(t, err, ErrCyclicValue)
+		require.NotPanics(t, func() {
+			got := CelValueToGo(GoToCelValue(anyCycle))
+			require.NotNil(t, got)
+		})
+
+		strCycle := map[string]any{}
+		strCycle["self"] = strCycle
+		_, err = TryCelValueToGo(GoToCelValue(strCycle))
+		require.ErrorIs(t, err, ErrCyclicValue)
+		require.NotPanics(t, func() {
+			got := CelValueToGo(GoToCelValue(strCycle))
+			require.NotNil(t, got)
+		})
+
+		sliceCycle := make([]any, 1)
+		sliceCycle[0] = sliceCycle
+		_, err = TryCelValueToGo(GoToCelValue(sliceCycle))
+		require.ErrorIs(t, err, ErrCyclicValue)
+		require.NotPanics(t, func() {
+			got := CelValueToGo(GoToCelValue(sliceCycle))
+			require.NotNil(t, got)
+		})
+	})
+
+	t.Run("excessive depth and exponential shared dag rejected", func(t *testing.T) {
+		var deep any = "leaf"
+		for range maxConversionDepth + 5 {
+			deep = map[string]any{"n": deep}
+		}
+		_, err := TryCelValueToGo(GoToCelValue(deep))
+		require.ErrorIs(t, err, ErrMaxDepthExceeded)
+
+		var dag any = map[string]any{"leaf": "v"}
+		for range 25 {
+			dag = map[string]any{"left": dag, "right": dag}
+		}
+		_, err = TryCelValueToGo(GoToCelValue(dag))
+		require.ErrorIs(t, err, ErrBudgetExceeded)
+
+		shared := map[string]any{"k": "v"}
+		smallDAG, err := TryCelValueToGo(GoToCelValue(map[string]any{"a": shared, "b": shared}))
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"a": map[string]any{"k": "v"},
+			"b": map[string]any{"k": "v"},
+		}, smallDAG)
+	})
+
+	t.Run("colliding normalized native keys rejected in strict mode and preserved in legacy mode", func(t *testing.T) {
+		cases := []struct {
+			name string
+			in   map[any]any
+		}{
+			{
+				name: "int and int64",
+				in:   map[any]any{int(1): "a", int64(1): "b"},
+			},
+			{
+				name: "uint and uint64",
+				in:   map[any]any{uint(1): "a", uint64(1): "b"},
+			},
+			{
+				name: "float32 and float64",
+				in:   map[any]any{float32(1.5): "a", float64(1.5): "b"},
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := TryCelValueToGo(GoToCelValue(tc.in))
+				require.ErrorIs(t, err, ErrDuplicateMapKey)
+
+				legacy, ok := CelValueToGo(GoToCelValue(tc.in)).(map[any]any)
+				require.True(t, ok)
+				assert.Len(t, legacy, 2)
+				for k, v := range tc.in {
+					assert.Equal(t, v, legacy[k])
+				}
+			})
+		}
+	})
+}
+
 func BenchmarkCelValueToGo_NullMap(b *testing.B) {
 	env, err := cel.NewEnv()
 	require.NoError(b, err)

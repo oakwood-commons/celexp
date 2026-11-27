@@ -8,6 +8,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -441,9 +443,10 @@ func generateCacheKeyWithAST(ctx context.Context, cache *ProgramCache, expressio
 			h.Write([]byte(name))
 		}
 
-		// Hash the AST's output type - this captures type information
-		// from the variable declarations
-		fmt.Fprintf(h, "type:%v", ast.OutputType())
+		// Hash checked output type, per-node types, and resolved references/overloads
+		// so expressions whose outer result type matches (e.g. bool) still get distinct
+		// cache keys when variable declarations select different overloads.
+		writeCheckedASTMetadata(h, ast)
 
 		// Return the AST so caller can reuse it
 		return cacheKeyResult{
@@ -461,6 +464,51 @@ func generateCacheKeyWithAST(ctx context.Context, cache *ProgramCache, expressio
 	return cacheKeyResult{
 		key: fmt.Sprintf("%x", h.Sum(nil)),
 		err: nil,
+	}
+}
+
+func writeCheckedASTMetadata(h io.Writer, compiledAST *cel.Ast) {
+	if compiledAST == nil {
+		return
+	}
+	fmt.Fprintf(h, "type:%v", compiledAST.OutputType())
+
+	checkedAST := compiledAST.NativeRep()
+	if checkedAST == nil {
+		return
+	}
+
+	typeMap := checkedAST.TypeMap()
+	if len(typeMap) > 0 {
+		typeIDs := make([]int64, 0, len(typeMap))
+		for id := range typeMap {
+			typeIDs = append(typeIDs, id)
+		}
+		slices.Sort(typeIDs)
+		for _, id := range typeIDs {
+			fmt.Fprintf(h, ";nt:%d=%s", id, formatTypeForKey(typeMap[id]))
+		}
+	}
+
+	refMap := checkedAST.ReferenceMap()
+	if len(refMap) > 0 {
+		refIDs := make([]int64, 0, len(refMap))
+		for id := range refMap {
+			refIDs = append(refIDs, id)
+		}
+		slices.Sort(refIDs)
+		for _, id := range refIDs {
+			refInfo := refMap[id]
+			if refInfo == nil {
+				continue
+			}
+			overloads := slices.Clone(refInfo.OverloadIDs)
+			slices.Sort(overloads)
+			fmt.Fprintf(h, ";nr:%d=%s[%s]", id, refInfo.Name, strings.Join(overloads, ","))
+			if refInfo.Value != nil {
+				fmt.Fprintf(h, "=%T:%v", refInfo.Value, refInfo.Value.Value())
+			}
+		}
 	}
 }
 
@@ -497,31 +545,45 @@ func serializeAST(expr ast.Expr, checkedAST *ast.AST) string {
 		parts = append(parts, fmt.Sprintf("literal(%T:%v)", lit, lit))
 
 	case ast.IdentKind:
-		// Identifiers are replaced with their type
+		// Identifiers are replaced with their type (preserving constant values when bound)
 		ident := expr.AsIdent()
-		if t := checkedAST.GetType(expr.ID()); t != nil {
+		if refInfo := checkedAST.ReferenceMap()[expr.ID()]; refInfo != nil && refInfo.Value != nil {
+			parts = append(parts, fmt.Sprintf("const(%s:%T:%v)", formatTypeForKey(checkedAST.GetType(expr.ID())), refInfo.Value, refInfo.Value.Value()))
+		} else if t := checkedAST.GetType(expr.ID()); t != nil {
 			parts = append(parts, fmt.Sprintf("ident(%s)", formatTypeForKey(t)))
 		} else {
 			parts = append(parts, fmt.Sprintf("ident(%s)", ident))
 		}
 
 	case ast.SelectKind:
-		// Property access: serialize target and field name
+		// Qualified constants and enum values parse as SelectKind with a bound ReferenceInfo value.
+		if refInfo := checkedAST.ReferenceMap()[expr.ID()]; refInfo != nil && refInfo.Value != nil {
+			parts = append(parts, fmt.Sprintf("const(%s:%T:%v)", formatTypeForKey(checkedAST.GetType(expr.ID())), refInfo.Value, refInfo.Value.Value()))
+			break
+		}
+		// Property access or presence test (has(x.f)): serialize target, field name, test-only flag, and checked result type
 		sel := expr.AsSelect()
 		targetStr := serializeAST(sel.Operand(), checkedAST)
-		parts = append(parts, fmt.Sprintf("select(%s.%s)", targetStr, sel.FieldName()))
+		kindPrefix := "select"
+		if sel.IsTestOnly() {
+			kindPrefix = "has"
+		}
+		parts = append(parts, fmt.Sprintf("%s(%s.%s:%s)", kindPrefix, targetStr, sel.FieldName(), formatTypeForKey(checkedAST.GetType(expr.ID()))))
 
 	case ast.CallKind:
-		// Function calls: serialize function name and arguments
+		// Function calls: serialize function name, resolved overloads/type, and arguments
 		call := expr.AsCall()
 		funcName := call.FunctionName()
+		overloads := slices.Clone(checkedAST.GetOverloadIDs(expr.ID()))
+		slices.Sort(overloads)
+		retType := formatTypeForKey(checkedAST.GetType(expr.ID()))
 
 		// Serialize target if present (for method calls)
 		if call.IsMemberFunction() {
 			targetStr := serializeAST(call.Target(), checkedAST)
-			parts = append(parts, fmt.Sprintf("method(%s.%s", targetStr, funcName))
+			parts = append(parts, fmt.Sprintf("method(%s.%s[%s]:%s", targetStr, funcName, strings.Join(overloads, "|"), retType))
 		} else {
-			parts = append(parts, fmt.Sprintf("call(%s", funcName))
+			parts = append(parts, fmt.Sprintf("call(%s[%s]:%s", funcName, strings.Join(overloads, "|"), retType))
 		}
 
 		// Serialize arguments
