@@ -743,10 +743,16 @@ func EvalAsWithContext[T any](ctx context.Context, r *CompileResult, vars map[st
 	switch any(zero).(type) {
 	case []any:
 		needsConversion = true
-		result = conversion.CelValueToGo(out)
+		result, err = conversion.TryCelValueToGo(out)
+		if err != nil {
+			return zero, fmt.Errorf("failed to convert result of expression %q: %w", r.Expression, err)
+		}
 	case map[string]any:
 		needsConversion = true
-		result = conversion.CelValueToGo(out)
+		result, err = conversion.TryCelValueToGo(out)
+		if err != nil {
+			return zero, fmt.Errorf("failed to convert result of expression %q: %w", r.Expression, err)
+		}
 	case int:
 		// Convert int64 to int
 		needsConversion = true
@@ -759,7 +765,10 @@ func EvalAsWithContext[T any](ctx context.Context, r *CompileResult, vars map[st
 	case []string:
 		// Convert []any to []string
 		needsConversion = true
-		celList := conversion.CelValueToGo(out)
+		celList, convErr := conversion.TryCelValueToGo(out)
+		if convErr != nil {
+			return zero, fmt.Errorf("failed to convert result of expression %q: %w", r.Expression, convErr)
+		}
 		if anyList, ok := celList.([]any); ok {
 			strList := make([]string, len(anyList))
 			for i, v := range anyList {

@@ -52,6 +52,24 @@ func TestNew(t *testing.T) {
 			expected:   int64(5),
 		},
 		{
+			name:       "math custom extension - sum coexists with built-in math",
+			expression: `math.sum([math.abs(-2), 3, 5])`,
+			vars:       map[string]interface{}{},
+			expected:   int64(10),
+		},
+		{
+			name:       "marshalling extension - json.unmarshalJSONC and stripComments",
+			expression: `json.unmarshalJSONC('{"url": "https://example.com//v1", /* c */ }').url == json.unmarshal(json.stripComments('{"url": "https://example.com//v1",}')).url`,
+			vars:       map[string]interface{}{},
+			expected:   true,
+		},
+		{
+			name:       "marshalling extension - frontmatter parse and format",
+			expression: `cel.bind(p, frontmatter.parse("---\ntitle: Doc\n---\nBody"), frontmatter.parse(frontmatter.format(p.meta, p.body)).meta.title)`,
+			vars:       map[string]interface{}{},
+			expected:   "Doc",
+		},
+		{
 			name:       "lists extension - reverse",
 			expression: `[1, 2, 3].reverse().size()`,
 			vars:       map[string]interface{}{},

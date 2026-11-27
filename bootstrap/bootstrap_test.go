@@ -26,6 +26,59 @@ func TestDefault(t *testing.T) {
 		`strings.slugify("Hello, World!")`, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "hello-world", out)
+
+	sumOut, err := celexp.EvaluateExpression(context.Background(),
+		`math.sum(json.unmarshalJSONC('[1, 2, /* comment */ 3,]').map(x, int(x)))`, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(6), sumOut)
+
+	fmOut, err := celexp.EvaluateExpression(context.Background(),
+		`frontmatter.parse(frontmatter.format({"title": "Guide"}, "# Hi")).meta.title`, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Guide", fmOut)
+
+	portsDoc := "---\nports:\n  80: http\n  443: https\n  \"8080\": alt\nflags:\n  true: enabled\n---\n# Service\n"
+	evalParsed, err := celexp.EvaluateExpression(context.Background(),
+		`frontmatter.parse(doc)`, nil, map[string]any{"doc": portsDoc})
+	require.NoError(t, err)
+	evalMap, ok := evalParsed.(map[string]any)
+	require.True(t, ok)
+	evalMeta, ok := evalMap["meta"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[any]any{
+		int64(80):  "http",
+		int64(443): "https",
+		"8080":     "alt",
+	}, evalMeta["ports"])
+	assert.Equal(t, map[any]any{true: "enabled"}, evalMeta["flags"])
+
+	envOpts, celVars := celexp.BuildCELContext(nil, map[string]any{"doc": portsDoc})
+	compiled, err := celexp.Expression(`frontmatter.parse(doc)`).Compile(envOpts)
+	require.NoError(t, err)
+	typedMap, err := celexp.EvalAs[map[string]any](compiled, celVars)
+	require.NoError(t, err)
+	typedMeta, ok := typedMap["meta"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[any]any{
+		int64(80):  "http",
+		int64(443): "https",
+		"8080":     "alt",
+	}, typedMeta["ports"])
+	assert.Equal(t, map[any]any{true: "enabled"}, typedMeta["flags"])
+
+	cyclicAny := map[any]any{}
+	cyclicAny[int64(1)] = cyclicAny
+	_, err = celexp.EvaluateExpression(context.Background(), `m`, nil, map[string]any{"m": cyclicAny})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cyclic value")
+
+	dupKeys := map[string]any{"ports": map[any]any{int(1): "a", int64(1): "b"}}
+	dupOpts, dupVars := celexp.BuildCELContext(nil, map[string]any{"m": dupKeys})
+	dupCompiled, err := celexp.Expression(`m`).Compile(dupOpts)
+	require.NoError(t, err)
+	_, err = celexp.EvalAs[map[string]any](dupCompiled, dupVars)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate map key")
 }
 
 // TestDefault_Idempotent confirms calling Default() more than once is safe

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/oakwood-commons/celexp"
+	"github.com/oakwood-commons/celexp/detail"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -296,7 +297,8 @@ func TestCustom(t *testing.T) {
 		"filepath":    {"filepath.dir", "filepath.normalize", "filepath.exists", "filepath.join"},
 		"guid":        {"guid.new"},
 		"map":         {"map.add", "map.select", "map.omit", "map.merge"},
-		"marshalling": {"json.marshal", "json.unmarshal", "yaml.marshal", "yaml.unmarshal"},
+		"marshalling": {"json.marshal", "json.unmarshal", "json.unmarshalJSONC", "json.stripComments", "yaml.marshal", "yaml.unmarshal", "frontmatter.parse", "frontmatter.format"},
+		"math":        {"math.sum"},
 		"out":         {"out.nil"},
 		"regex":       {"regex.match", "regex.replace", "regex.findAll", "regex.split"},
 		"sort":        {"sort.objects"},
@@ -355,5 +357,47 @@ func TestAll_NoDuplicates(t *testing.T) {
 	for _, f := range allFuncs {
 		assert.False(t, nameSet[f.Name], "Duplicate function name found: %s", f.Name)
 		nameSet[f.Name] = true
+	}
+}
+
+func TestCustom_DetailCatalogMetadata(t *testing.T) {
+	funcs := Custom()
+	require.NoError(t, SetFunctionNames(funcs))
+
+	catalog := detail.BuildFunctionList(funcs)
+	byName := make(map[string]map[string]any, len(catalog))
+	for _, entry := range catalog {
+		name, _ := entry["name"].(string)
+		byName[name] = entry
+	}
+
+	expectedMeta := map[string]struct {
+		category  string
+		namespace string
+	}{
+		"json.unmarshalJSONC": {category: "encoding", namespace: "marshalling"},
+		"json.stripComments":  {category: "encoding", namespace: "marshalling"},
+		"frontmatter.parse":   {category: "encoding", namespace: "marshalling"},
+		"frontmatter.format":  {category: "encoding", namespace: "marshalling"},
+		"math.sum":            {category: "math", namespace: "math"},
+	}
+	funcByName := make(map[string]celexp.ExtFunction, len(funcs))
+	for _, fn := range funcs {
+		funcByName[fn.Name] = fn
+	}
+
+	for wantName, want := range expectedMeta {
+		fn, exists := funcByName[wantName]
+		require.True(t, exists, "expected %s in Custom()", wantName)
+		assert.Equal(t, want.category, fn.Category)
+		assert.Equal(t, want.namespace, fn.Namespace)
+
+		entry, ok := byName[wantName]
+		require.True(t, ok, "expected %s in BuildFunctionList output", wantName)
+		assert.Equal(t, true, entry["custom"])
+		assert.NotEmpty(t, entry["signature"], "expected non-empty signature for %s", wantName)
+		assert.NotEmpty(t, entry["description"], "expected non-empty description for %s", wantName)
+		assert.Equal(t, []string{wantName}, entry["functionNames"])
+		assert.NotEmpty(t, entry["examples"], "expected non-empty examples for %s", wantName)
 	}
 }

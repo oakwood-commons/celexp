@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/celexp/ext/host"
 	celmap "github.com/oakwood-commons/celexp/ext/map"
 	"github.com/oakwood-commons/celexp/ext/marshalling"
+	celmath "github.com/oakwood-commons/celexp/ext/math"
 	"github.com/oakwood-commons/celexp/ext/out"
 	celregex "github.com/oakwood-commons/celexp/ext/regex"
 	celsort "github.com/oakwood-commons/celexp/ext/sort"
@@ -759,8 +760,15 @@ func Custom() celexp.ExtFunctionList {
 		marshalling.JSONMarshalFunc(),
 		marshalling.JSONMarshalPrettyFunc(),
 		marshalling.JSONUnmarshalFunc(),
+		marshalling.JSONUnmarshalJSONCFunc(),
+		marshalling.JSONStripCommentsFunc(),
 		marshalling.YamlMarshalFunc(),
 		marshalling.YamlUnmarshalFunc(),
+		marshalling.FrontmatterParseFunc(),
+		marshalling.FrontmatterFormatFunc(),
+
+		// Math functions
+		celmath.SumFunc(),
 
 		// Out functions
 		out.NilFunc(),
@@ -792,19 +800,21 @@ func Custom() celexp.ExtFunctionList {
 
 	// Assign categories based on function name prefix
 	categoryMap := map[string]string{
-		"arrays.":  "collections",
-		"debug.":   "debug",
-		"filepath": "filepath",
-		"guid.":    "utility",
-		"map.":     "collections",
-		"json.":    "encoding",
-		"yaml.":    "encoding",
-		"out.":     "utility",
-		"regex.":   "strings",
-		"sort.":    "collections",
-		"strings.": "strings",
-		"time.":    "time",
-		"url.":     "encoding",
+		"arrays.":      "collections",
+		"debug.":       "debug",
+		"filepath":     "filepath",
+		"frontmatter.": "encoding",
+		"guid.":        "utility",
+		"map.":         "collections",
+		"math.":        "math",
+		"json.":        "encoding",
+		"yaml.":        "encoding",
+		"out.":         "utility",
+		"regex.":       "strings",
+		"sort.":        "collections",
+		"strings.":     "strings",
+		"time.":        "time",
+		"url.":         "encoding",
 	}
 	for i := range funcs {
 		if funcs[i].Category != "" {
@@ -823,27 +833,30 @@ func Custom() celexp.ExtFunctionList {
 
 	// Assign namespaces (allowlist units for ext.Select/env.NewRestricted) based
 	// on function name prefix. Namespace is intentionally NOT the same map as
-	// categoryMap: "strings." here maps to the "strings" namespace, the same
-	// namespace used for cel-go's built-in "strings" extension in BuiltIn() --
-	// that overlap is deliberate so a caller allowlisting "strings" gets both
-	// cel-go's strings functions and celexp's strings.* functions together.
+	// categoryMap: "strings." and "math." here map to the "strings" and "math"
+	// namespaces, the same namespaces used for cel-go's built-in "strings" and
+	// "math" extensions in BuiltIn() -- that overlap is deliberate so a caller
+	// allowlisting "strings" or "math" gets both cel-go's built-in functions and
+	// celexp's custom functions in that namespace together.
 	// "regex." gets its own "regex" namespace (not folded into "strings")
 	// because a caller may want string manipulation without a regex engine.
 	namespaceMap := map[string]string{
-		"arrays.":  "arrays",
-		"debug.":   "debug",
-		"filepath": "filepath",
-		"guid.":    "guid",
-		"host.":    "host",
-		"map.":     "map",
-		"json.":    "marshalling",
-		"yaml.":    "marshalling",
-		"out.":     "out",
-		"regex.":   "regex",
-		"sort.":    "sort",
-		"strings.": "strings",
-		"time.":    "time",
-		"url.":     "url",
+		"arrays.":      "arrays",
+		"debug.":       "debug",
+		"filepath":     "filepath",
+		"frontmatter.": "marshalling",
+		"guid.":        "guid",
+		"host.":        "host",
+		"map.":         "map",
+		"math.":        "math",
+		"json.":        "marshalling",
+		"yaml.":        "marshalling",
+		"out.":         "out",
+		"regex.":       "regex",
+		"sort.":        "sort",
+		"strings.":     "strings",
+		"time.":        "time",
+		"url.":         "url",
 	}
 	for i := range funcs {
 		if funcs[i].Namespace != "" {

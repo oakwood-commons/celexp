@@ -330,6 +330,17 @@ func TestGenerateCacheKeyWithAST(t *testing.T) {
 		assert.NotEqual(t, key1.key, key3.key, "cost limit vs no limit should produce different keys")
 		assert.NotEqual(t, key2.key, key3.key, "different cost limits should produce different keys")
 	})
+
+	t.Run("same bool output type with different variable types produces different keys", func(t *testing.T) {
+		intOpts := []cel.EnvOption{cel.Variable("x", cel.IntType)}
+		dblOpts := []cel.EnvOption{cel.Variable("x", cel.DoubleType)}
+
+		keyInt := generateCacheKeyWithAST(ctx, cache, "type(x) == double", intOpts, GetDefaultCostLimit())
+		keyDbl := generateCacheKeyWithAST(ctx, cache, "type(x) == double", dblOpts, GetDefaultCostLimit())
+		require.NoError(t, keyInt.err)
+		require.NoError(t, keyDbl.err)
+		assert.NotEqual(t, keyInt.key, keyDbl.key, "different checked variable types must not share a cache key when OutputType is identical")
+	})
 }
 
 func TestCompile_withCache(t *testing.T) {
@@ -691,6 +702,28 @@ func TestCompile_withASTBasedCaching(t *testing.T) {
 		stats := cache.Stats()
 		assert.Equal(t, uint64(0), stats.Hits, "Without AST caching, should not share cache")
 		assert.Equal(t, uint64(2), stats.Misses, "Both should be cache misses")
+	})
+
+	t.Run("has(m.flag) does not collide with m.flag under AST keys", func(t *testing.T) {
+		cache := NewProgramCache(10, WithASTBasedCaching(true))
+		opts := []cel.EnvOption{
+			cel.Variable("m", cel.MapType(cel.StringType, cel.BoolType)),
+		}
+
+		hasProg, err := Expression("has(m.flag)").Compile(opts, WithCache(cache))
+		require.NoError(t, err)
+		valProg, err := Expression("m.flag").Compile(opts, WithCache(cache))
+		require.NoError(t, err)
+
+		// Present key set to false: has(m.flag) is true, m.flag is false.
+		vars := map[string]any{"m": map[string]bool{"flag": false}}
+		hasRes, err := hasProg.Eval(vars)
+		require.NoError(t, err)
+		assert.Equal(t, true, hasRes)
+
+		valRes, err := valProg.Eval(vars)
+		require.NoError(t, err)
+		assert.Equal(t, false, valRes)
 	})
 }
 

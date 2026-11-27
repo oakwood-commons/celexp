@@ -30,6 +30,7 @@ func TestNewRestrictedSecurityAssertion(t *testing.T) {
 		`size("hello") > 2`,
 		`"a,b,c".split(",").size() == 3`,
 		`math.abs(-5) == 5`,
+		`math.sum([1, 2, 3]) == 6`,
 		`sets.contains([1, 2, 3], [2, 3])`,
 		`"abc".matches("^[a-z]+$")`,
 		`regex.match("abc", "^[a-z]+$")`,
@@ -48,6 +49,8 @@ func TestNewRestrictedSecurityAssertion(t *testing.T) {
 		`time.now()`,
 		`guid.new()`,
 		`json.marshal({"a": 1})`,
+		`json.unmarshalJSONC('{"a": 1}')`,
+		`frontmatter.parse("---\na: 1\n---\nbody")`,
 		`url.encode("a b")`,
 	}
 	for _, expr := range denied {
